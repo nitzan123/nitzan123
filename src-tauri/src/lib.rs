@@ -55,6 +55,9 @@ pub fn run() {
             commands::develop_preview,
             commands::export,
             commands::caption_preview,
+            commands::lens_db_status,
+            commands::lens_db_download,
+            commands::lens_profile,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Prism Studio");

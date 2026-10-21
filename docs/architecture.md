@@ -34,8 +34,8 @@ Develop ─► develop_preview(id, settings, max) ─► cached linear source (L
 
 | # | Item | Notes |
 |---|---|---|
-| 1 | Full-resolution demosaic (RCD/AMaZE) + GPU path | the reference product uses green-first OpenCL demosaic kernels |
-| 2 | Lens correction via lensfun DB | the reference product bundles lensfun |
+| ✓ | Full-resolution demosaic (Malvar–He–Cutler) | done; a GPU path remains an option |
+| ✓ | Lens correction via lensfun DB | done (downloaded on request) |
 | 3 | ML masks (subject, sky, person) via ONNX Runtime | plugs into `masks::Mask`; ship open models (e.g. MODNet, SegFormer) |
 | 4 | Face detection/recognition + People view | cluster embeddings and auto-name by distance, as in the reference product's pipeline |
 | 5 | Embedding similarity search | replace dHash with CLIP embeddings + an ANN index |

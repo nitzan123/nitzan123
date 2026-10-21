@@ -82,7 +82,13 @@ fn find_jpeg_end(b: &[u8], mut pos: usize) -> Option<usize> {
 const SRGB_TO_XYZ: [[f32; 3]; 3] =
     [[0.412_453, 0.357_580, 0.180_423], [0.212_671, 0.715_160, 0.072_169], [0.019_334, 0.119_193, 0.950_227]];
 
-pub fn decode_raw(path: &Path) -> Result<LinearImage> {
+/// Decodes sensor data to linear sRGB.
+///
+/// `max_dim` is the long edge the caller needs (0 = full size). When the
+/// fast superpixel path (half resolution for Bayer, a third for X-Trans)
+/// already covers it — e.g. Develop previews — that path is used; otherwise
+/// the sensor is demosaiced at full resolution (export, 1:1 view).
+pub fn decode_raw(path: &Path, max_dim: u32) -> Result<LinearImage> {
     let err = |reason: String| Error::Raw { path: path.to_path_buf(), reason };
     let raw = rawloader::decode_file(path).map_err(|e| err(e.to_string()))?;
     if raw.cpp != 1 {
@@ -104,52 +110,92 @@ pub fn decode_raw(path: &Path) -> Result<LinearImage> {
     }
     let g = wb[1].max(1e-6);
     let wb = [wb[0] / g, 1.0, wb[2] / g];
-
     let rgb_cam = camera_to_srgb(&raw.xyz_to_cam);
 
-    // Superpixel cell: 2×2 for Bayer, 3×3 for Fuji X-Trans (6×6 pattern,
-    // every aligned 3×3 block holds R, G and B). Respect the crops
-    // [top, right, bottom, left] and align cells to the pattern.
-    let cell = if raw.cfa.width == 6 && raw.cfa.height == 6 { 3 } else { 2 };
+    let bayer = raw.cfa.width == 2 && raw.cfa.height == 2;
+    let xtrans = raw.cfa.width == 6 && raw.cfa.height == 6;
+    // 4-colour CFAs (e.g. RGBE) treat the 4th colour as green.
+    let color = |y: usize, x: usize| -> usize {
+        match raw.cfa.color_at(y, x) {
+            c @ 0..=2 => c,
+            _ => 1,
+        }
+    };
+    let raw_color = |y: usize, x: usize| raw.cfa.color_at(y, x).min(3);
+    // Normalised, white-balanced sensor value.
+    let sample = |y: usize, x: usize| -> f32 {
+        let c = raw_color(y, x);
+        let v = (data[y * w + x] - black[c]) / (white[c] - black[c]).max(1.0);
+        v.max(0.0) * wb[color(y, x)]
+    };
+
+    // Crops are [top, right, bottom, left].
     let [ct, cr, cb, cl] = raw.crops;
-    let x0 = cl.div_ceil(cell) * cell;
-    let y0 = ct.div_ceil(cell) * cell;
     let x1 = w.saturating_sub(cr);
     let y1 = h.saturating_sub(cb);
-    let ow = (x1.saturating_sub(x0)) / cell;
-    let oh = (y1.saturating_sub(y0)) / cell;
-    if ow == 0 || oh == 0 {
-        return Err(err("empty image after crop".into()));
-    }
+    let cell = if xtrans { 3 } else { 2 };
+    let super_long = (x1.saturating_sub(cl)).max(y1.saturating_sub(ct)) / cell;
+    let full = max_dim == 0 || max_dim as usize > super_long;
 
-    let mut out = vec![0f32; ow * oh * 3];
     use rayon::prelude::*;
-    out.par_chunks_mut(ow * 3).enumerate().for_each(|(oy, row)| {
-        for ox in 0..ow {
-            let mut acc = [0f32; 3];
-            let mut n = [0f32; 3];
-            for dy in 0..cell {
-                for dx in 0..cell {
-                    let y = y0 + oy * cell + dy;
-                    let x = x0 + ox * cell + dx;
-                    let c = raw.cfa.color_at(y, x).min(3);
-                    let ch = if c == 3 { 1 } else { c };
-                    let v = (data[y * w + x] - black[c]) / (white[c] - black[c]).max(1.0);
-                    acc[ch] += v.max(0.0);
-                    n[ch] += 1.0;
+    let (ow, oh, mut out) = if full && (bayer || xtrans || raw.cfa.width > 0) {
+        let (pw, ph) = (x1.saturating_sub(cl), y1.saturating_sub(ct));
+        if pw < 4 || ph < 4 {
+            return Err(err("empty image after crop".into()));
+        }
+        let mut plane = vec![0f32; pw * ph];
+        plane.par_chunks_mut(pw).enumerate().for_each(|(y, row)| {
+            for (x, v) in row.iter_mut().enumerate() {
+                *v = sample(ct + y, cl + x);
+            }
+        });
+        let rgb = crate::demosaic::demosaic(
+            &crate::demosaic::Plane { data: &plane, w: pw, h: ph, oy: ct, ox: cl },
+            bayer,
+            &color,
+        );
+        (pw, ph, rgb)
+    } else {
+        // Superpixel: average each aligned cell per colour (every aligned
+        // 3×3 X-Trans block holds R, G and B).
+        let x0 = cl.div_ceil(cell) * cell;
+        let y0 = ct.div_ceil(cell) * cell;
+        let ow = (x1.saturating_sub(x0)) / cell;
+        let oh = (y1.saturating_sub(y0)) / cell;
+        if ow == 0 || oh == 0 {
+            return Err(err("empty image after crop".into()));
+        }
+        let mut out = vec![0f32; ow * oh * 3];
+        out.par_chunks_mut(ow * 3).enumerate().for_each(|(oy, row)| {
+            for ox in 0..ow {
+                let mut acc = [0f32; 3];
+                let mut n = [0f32; 3];
+                for dy in 0..cell {
+                    for dx in 0..cell {
+                        let (y, x) = (y0 + oy * cell + dy, x0 + ox * cell + dx);
+                        let ch = color(y, x);
+                        acc[ch] += sample(y, x);
+                        n[ch] += 1.0;
+                    }
+                }
+                // A channel absent from the cell (unusual CFA) borrows green
+                // so it never turns into a coloured dot.
+                let g = if n[1] > 0.0 { acc[1] / n[1] } else { 0.0 };
+                for c in 0..3 {
+                    row[ox * 3 + c] = if n[c] > 0.0 { acc[c] / n[c] } else { g };
                 }
             }
-            // A channel absent from the cell (unusual CFA) borrows green so
-            // it never turns into a coloured dot.
-            let g = if n[1] > 0.0 { acc[1] / n[1] } else { 0.0 };
-            let mean = |c: usize| if n[c] > 0.0 { acc[c] / n[c] } else { g };
-            let cam = [mean(0) * wb[0], mean(1) * wb[1], mean(2) * wb[2]];
-            for c in 0..3 {
-                row[ox * 3 + c] = (rgb_cam[c][0] * cam[0] + rgb_cam[c][1] * cam[1] + rgb_cam[c][2] * cam[2]).max(0.0);
-            }
+        });
+        (ow, oh, out)
+    };
+
+    // Camera RGB → linear sRGB.
+    out.par_chunks_mut(3).for_each(|p| {
+        let cam = [p[0], p[1], p[2]];
+        for c in 0..3 {
+            p[c] = (rgb_cam[c][0] * cam[0] + rgb_cam[c][1] * cam[1] + rgb_cam[c][2] * cam[2]).max(0.0);
         }
     });
-
     apply_base_curve(&mut out);
     LinearImage::from_raw(ow as u32, oh as u32, out).ok_or_else(|| err("buffer size mismatch".into()))
 }

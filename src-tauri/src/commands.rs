@@ -435,3 +435,95 @@ pub async fn export(
     .await
     .map_err(s)?
 }
+
+// ------------------------------------------------------------------- lenses
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LensDbStatus {
+    installed: bool,
+    lenses: usize,
+}
+
+#[tauri::command]
+pub async fn lens_db_status(app: AppHandle) -> CmdResult<LensDbStatus> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let db = app.state::<AppState>().lenses.get();
+        Ok(LensDbStatus { installed: db.is_some(), lenses: db.map_or(0, |d| d.lenses.len()) })
+    })
+    .await
+    .map_err(s)?
+}
+
+/// Downloads the lensfun database (~5 MB). Emits `lens-db-progress`.
+#[tauri::command]
+pub async fn lens_db_download(app: AppHandle) -> CmdResult<LensDbStatus> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let db = prism_core::lens::download_db(&state.lenses.dir, |done, total| {
+            let _ = app.emit("lens-db-progress", [done, total]);
+        })
+        .map_err(s)?;
+        let n = db.lenses.len();
+        *state.lenses.db.lock().unwrap_or_else(|e| e.into_inner()) = Some(std::sync::Arc::new(db));
+        Ok(LensDbStatus { installed: true, lenses: n })
+    })
+    .await
+    .map_err(s)?
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LensMatch {
+    /// What the photo's EXIF says.
+    exif_lens: Option<String>,
+    camera: Option<String>,
+    profile: Option<prism_core::lens::LensProfile>,
+    message: String,
+}
+
+/// Resolves the lens profile for a photo from the database.
+#[tauri::command]
+pub async fn lens_profile(app: AppHandle, id: i64) -> CmdResult<LensMatch> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let asset = state.catalog().asset(id).map_err(s)?;
+        let e = read_exif(Path::new(&asset.path));
+        let camera =
+            [e.camera_make.clone(), e.camera_model.clone()].into_iter().flatten().collect::<Vec<_>>().join(" ");
+        let camera = Some(camera).filter(|c| !c.is_empty());
+        let Some(db) = state.lenses.get() else {
+            return Ok(LensMatch {
+                exif_lens: e.lens,
+                camera,
+                profile: None,
+                message: "Lens database not installed".into(),
+            });
+        };
+        let Some(lens_name) = e.lens.clone() else {
+            return Ok(LensMatch {
+                exif_lens: None,
+                camera,
+                profile: None,
+                message: "The photo doesn't record which lens was used".into(),
+            });
+        };
+        let crop = db
+            .camera_crop(e.camera_make.as_deref().unwrap_or(""), e.camera_model.as_deref().unwrap_or(""))
+            .unwrap_or(1.0);
+        let Some(entry) = db.find_lens(&lens_name, crop) else {
+            return Ok(LensMatch {
+                exif_lens: Some(lens_name.clone()),
+                camera,
+                profile: None,
+                message: format!("No profile for \"{lens_name}\""),
+            });
+        };
+        let focal = e.focal_length.unwrap_or(0.0);
+        let profile = entry.profile(focal, e.f_number.unwrap_or(0.0), crop);
+        let message = format!("{} @ {:.0} mm", profile.lens, focal);
+        Ok(LensMatch { exif_lens: Some(lens_name), camera, profile: Some(profile), message })
+    })
+    .await
+    .map_err(s)?
+}

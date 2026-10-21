@@ -12,10 +12,27 @@ const SOURCE_CACHE_LEN: usize = 4;
 /// Asset id + file size + mtime: a file edited outside the app is re-decoded.
 type SourceKey = (i64, i64, i64);
 
+/// Asset-independent lens database, loaded lazily from `<data>/lensfun`.
+pub struct LensStore {
+    pub dir: std::path::PathBuf,
+    pub db: Mutex<Option<Arc<prism_core::lens::LensDb>>>,
+}
+
+impl LensStore {
+    pub fn get(&self) -> Option<Arc<prism_core::lens::LensDb>> {
+        let mut g = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        if g.is_none() && self.dir.is_dir() {
+            *g = prism_core::lens::LensDb::load_dir(&self.dir).ok().map(Arc::new);
+        }
+        g.clone()
+    }
+}
+
 pub struct AppState {
     catalog: Mutex<Catalog>,
     pub thumbs: ThumbCache,
     pub geocoder: prism_core::geocode::Geocoder,
+    pub lenses: LensStore,
     /// Recently decoded linear sources keyed by asset id, so slider drags
     /// don't re-decode the file.
     sources: Mutex<VecDeque<(SourceKey, Arc<LinearImage>)>>,
@@ -27,6 +44,7 @@ impl AppState {
             catalog: Mutex::new(Catalog::open(&data_dir.join("catalog.sqlite"))?),
             thumbs: ThumbCache::new(cache_dir.join("thumbs"))?,
             geocoder: prism_core::geocode::Geocoder::new(),
+            lenses: LensStore { dir: data_dir.join("lensfun"), db: Mutex::new(None) },
             sources: Mutex::new(VecDeque::new()),
         })
     }

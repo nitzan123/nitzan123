@@ -3,10 +3,12 @@
 //! `src-tauri` is a thin layer over this crate.
 
 pub mod catalog;
+pub mod demosaic;
 pub mod develop;
 pub mod error;
 pub mod geocode;
 pub mod imaging;
+pub mod lens;
 pub mod metadata;
 pub mod overlay;
 pub mod raw;

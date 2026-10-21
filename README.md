@@ -45,8 +45,18 @@ and 1:1 zoom with panning (`Z` or click).
 - **Auto tone**, a separate conservative **Auto WB**, before/after (`\`),
   undo/redo (Ctrl+Z / Ctrl+Shift+Z), and copy/paste of settings to a
   selection. Edits autosave.
-- Real RAW decoding from sensor data (rawloader). Tested on Nikon NEF and
-  Canon CR2.
+- Real RAW decoding from sensor data (rawloader) at **full sensor
+  resolution**: Malvar–He–Cutler demosaic for Bayer sensors and a 5×5
+  interpolation for Fuji X-Trans. Previews use a fast half-resolution path;
+  export and 1:1 zoom use the full-resolution decode (6000×4000 in about 2 s).
+  Tested on Nikon NEF and Canon CR2.
+- **Lens correction** fixes distortion, vignetting and chromatic aberration:
+  - Profiles: the lensfun database (1,500+ lenses, downloaded in-app on
+    request). The photo's lens is matched from EXIF and its profile is
+    interpolated for the focal length and aperture.
+  - Each correction has a strength slider, plus manual sliders for lenses
+    without a profile.
+  - The image auto-zooms so no blank borders appear.
 
 **Edit**: local adjustments, each with its own exposure, contrast,
 saturation, temperature, tint and blur.
@@ -90,7 +100,7 @@ Requirements: Rust (stable) and the
 ```bash
 cargo run -p prism-studio --release                # start the app
 cargo run -p prism-studio --release -- ~/Pictures  # start and index a folder
-cargo test --workspace                             # 54 tests (unit + robustness)
+cargo test --workspace                             # 63 tests (unit + robustness)
 ```
 
 To build installers (`.msi`/`.exe`, `.dmg`, `.deb`/`.AppImage`):
@@ -109,7 +119,7 @@ cargo run --release --example develop_cli -- out/ photo1.NEF photo2.CR2
 
 ## Quality
 
-- **54 automated tests**, including an end-to-end robustness suite. It uses a
+- **63 automated tests**, including an end-to-end robustness suite. It uses a
   generated library of awkward files: Hebrew folder and file names, spaces,
   EXIF-rotated portraits, 16-bit TIFF, alpha PNG, 1×1 images, empty, truncated
   and fake files. It checks that everything indexes, thumbnails, decodes and
@@ -136,6 +146,8 @@ crates/prism-core   UI-agnostic engine (all logic, all tests)
   overlay.rs        caption text rendering (bundled DejaVu Sans Bold, bidi-aware)
   imaging.rs        single entry point for decoding (display path / linear path)
   raw.rs            embedded-preview extraction, RAW decode → linear sRGB, base curve
+  demosaic.rs       full-resolution demosaic (Malvar–He–Cutler Bayer, generic CFA)
+  lens.rs           lensfun DB parse/match/interpolate + distortion/TCA/vignetting correction
   thumbs.rs         content-keyed on-disk thumbnail cache (+ developed variants)
   similarity.rs     dHash + Hamming distance
   xmp.rs            sidecar read/write
@@ -152,9 +164,10 @@ noise reduction and sharpening.
 
 ## Known limitations (v0.1)
 
-- RAW demosaic uses superpixel binning (2×2 Bayer, 3×3 Fuji X-Trans), so RAW
-  output is half (X-Trans: one third) of the sensor resolution. RAWs the
-  decoder can't read (e.g. CR3) are developed from their embedded JPEG. Full-resolution demosaic (AMaZE/RCD-class) is the top roadmap
+- RAWs the decoder can't read (e.g. CR3) are developed from their embedded
+  JPEG. X-Trans demosaicing is simpler than Bayer's (fine detail is softer).
+- Lens matching needs the lens name in EXIF; some bodies (e.g. many Nikons)
+  don't record it, so use the manual sliders there. Full-resolution demosaic (AMaZE/RCD-class) is the top roadmap
   item.
 - No lens-profile correction or chromatic-aberration removal yet.
 - The sky mask is a heuristic (colour, brightness and connection to the top

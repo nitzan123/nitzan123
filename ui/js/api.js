@@ -42,6 +42,9 @@ export const api = {
   developPreview: (id, settings, max) => invoke("develop_preview", { id, settings, max }),
   export: (ids, dir, quality, maxDim, caption = null) => invoke("export", { ids, dir, quality, maxDim, caption }),
   captionPreview: (id, caption) => invoke("caption_preview", { id, caption }),
+  lensDbStatus: () => invoke("lens_db_status"),
+  lensDbDownload: () => invoke("lens_db_download"),
+  lensProfile: (id) => invoke("lens_profile", { id }),
   pickFolder: (title) => invoke("plugin:dialog|open", { options: { directory: true, multiple: false, title } }),
   listen: (event, cb) => T.event.listen(event, (e) => cb(e.payload)),
 };

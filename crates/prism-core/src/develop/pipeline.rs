@@ -2,6 +2,7 @@
 //!
 //! | # | Stage | Space |
 //! |---|-------|-------|
+//! | 0 | lens: vignetting, distortion, chromatic aberration | linear |
 //! | 1 | geometry: quarter turns, flip, straighten, crop | linear |
 //! | 2 | white balance, exposure | linear |
 //! | 3 | highlights / shadows / whites / blacks / contrast + highlight roll-off | luminance, perceptual |
@@ -35,6 +36,7 @@ pub fn render(src: &LinearImage, s: &DevelopSettings) -> Rgb32FImage {
         h: src.height() as usize,
         px: src.as_raw().chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect(),
     };
+    let buf = crate::lens::apply(buf, &s.lens);
     let mut buf = geometry(buf, &s.geometry);
     linear_stage(&mut buf, s);
     clarity(&mut buf, s.light.clarity);

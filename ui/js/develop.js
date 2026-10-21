@@ -25,6 +25,10 @@ export const defaults = () => ({
   vignette: { amount: 0, midpoint: 50, feather: 50 },
   geometry: { rotate90: 0, flipHorizontal: false, straighten: 0, crop: null },
   local: [],
+  lens: {
+    enabled: false, profile: null, distortion: 100, vignetting: 100, ca: 100,
+    manualDistortion: 0, manualVignetting: 0, manualCaRed: 0, manualCaBlue: 0,
+  },
 });
 
 const BANDS = [
@@ -73,6 +77,7 @@ function bind(path, opts) {
 function refreshControls() {
   for (const b of bindings) b.ctrl.update(b.get());
   curve?.update(dev.s.curve.points);
+  refreshLensUi();
   edit.render(ctx);
 }
 
@@ -320,16 +325,95 @@ function buildPanel() {
         btn("Free", () => cropTo(null)), btn("Original", () => cropTo("orig")), btn("1:1", () => cropTo(1)),
         btn("4:5", () => cropTo(4 / 5)), btn("3:2", () => cropTo(3 / 2)), btn("16:9", () => cropTo(16 / 9))),
       cropSlider("x", "Left %"), cropSlider("y", "Top %"), cropSlider("w", "Width %"), cropSlider("h", "Height %")),
+    section("Lens correction", false,
+      el("div", { id: "lens-status", class: "hint" }),
+      el("button", { id: "lens-download", class: "btn small", hidden: true, onclick: downloadLensDb }, "Download lens profiles (5 MB)"),
+      el("label", { class: "check" },
+        el("input", { type: "checkbox", id: "lens-enable", onchange: (e) => toggleLensProfile(e.target.checked) }),
+        "Use lens profile"),
+      bind("lens.distortion", { label: "Distortion %", min: 0, max: 200, def: 100 }),
+      bind("lens.vignetting", { label: "Vignetting %", min: 0, max: 200, def: 100 }),
+      bind("lens.ca", { label: "Chrom. aber. %", min: 0, max: 200, def: 100 }),
+      el("h3", {}, "Manual"),
+      bind("lens.manualDistortion", { label: "Distortion", min: -100, max: 100 }),
+      bind("lens.manualVignetting", { label: "Vignetting", min: -100, max: 100 }),
+      bind("lens.manualCaRed", { label: "Red fringe", min: -100, max: 100 }),
+      bind("lens.manualCaBlue", { label: "Blue fringe", min: -100, max: 100 }),
+      el("p", { class: "hint" }, "Profiles: lensfun database (CC BY-SA 3.0), downloaded on request.")),
   );
+}
+
+// -------------------------------------------------------- lens correction
+
+let lensDb = null; // { installed, lenses }
+
+async function refreshLensUi() {
+  const st = $("lens-status");
+  if (!st) return;
+  $("lens-enable").checked = !!dev.s.lens.enabled;
+  if (lensDb == null) lensDb = await api.lensDbStatus().catch(() => ({ installed: false, lenses: 0 }));
+  $("lens-download").hidden = lensDb.installed;
+  const p = dev.s.lens.profile;
+  st.textContent = !lensDb.installed
+    ? "Lens profiles not installed — manual correction is still available."
+    : dev.s.lens.enabled && p
+      ? `Profile: ${p.lens} @ ${Math.round(p.focal)} mm`
+      : `${lensDb.lenses} lens profiles available.`;
+}
+
+async function downloadLensDb() {
+  const btn = $("lens-download");
+  btn.disabled = true;
+  const stop = await api.listen("lens-db-progress", ([d, t]) => (btn.textContent = `Downloading ${d}/${t}…`));
+  try {
+    lensDb = await api.lensDbDownload();
+    toast(`Installed ${lensDb.lenses} lens profiles`);
+  } catch (e) {
+    toast(`Download failed: ${e}`, true);
+  }
+  stop();
+  btn.disabled = false;
+  btn.textContent = "Download lens profiles (5 MB)";
+  refreshLensUi();
+}
+
+async function toggleLensProfile(on) {
+  const id = dev.id;
+  if (!on) {
+    change((s) => (s.lens.enabled = false));
+    commit();
+    return refreshLensUi();
+  }
+  try {
+    const m = await api.lensProfile(id);
+    if (id !== dev.id) return;
+    if (!m.profile) {
+      $("lens-enable").checked = false;
+      $("lens-status").textContent = m.message;
+      return;
+    }
+    change((s) => Object.assign(s.lens, { enabled: true, profile: m.profile }));
+    commit();
+  } catch (e) {
+    toast(String(e), true);
+  }
+  refreshLensUi();
 }
 
 // -------------------------------------------------------- copy / paste
 
 let clipboard = null;
 
+/** Clipboard settings applied over `target`'s: local masks and the lens
+ * profile (resolved for that photo's lens/focal/aperture) stay the target's. */
+const pasted = (target) => {
+  const c = JSON.parse(JSON.stringify(clipboard));
+  return { ...target, ...c, local: target.local, lens: { ...c.lens, enabled: target.lens.enabled, profile: target.lens.profile } };
+};
+
 function copySettings() {
   const { local, ...rest } = JSON.parse(JSON.stringify(dev.s));
-  clipboard = rest; // local masks are image-specific
+  clipboard = rest; // local masks are image-specific (lens profile handled in `pasted`)
   toast("Develop settings copied (without local masks)");
 }
 
@@ -341,7 +425,7 @@ async function pasteSettings() {
     if (id === dev.id) continue;
     try {
       const cur = Object.assign(defaults(), await api.developGet(id));
-      await api.developSave(id, { ...cur, ...JSON.parse(JSON.stringify(clipboard)), local: cur.local });
+      await api.developSave(id, pasted(cur));
       emit("asset-developed", id);
     } catch {
       failed.push(id);
@@ -349,7 +433,7 @@ async function pasteSettings() {
   }
   if (failed.length) toast(`Paste failed for ${failed.length} photo(s)`, true);
   if (ids.includes(dev.id)) {
-    change((s) => Object.assign(s, JSON.parse(JSON.stringify(clipboard)), { local: s.local }));
+    change((s) => Object.assign(s, pasted(s)));
     commit();
     refreshControls();
   }

@@ -27,7 +27,7 @@ pub fn load_display(path: &Path, max_dim: u32) -> Result<RgbImage> {
         let bytes = std::fs::read(path)?;
         match extract_embedded_jpeg(&bytes) {
             Some(jpeg) => image::load_from_memory(&jpeg)?,
-            None => DynamicImage::ImageRgb32F(decode_raw(path)?.map_to_srgb()),
+            None => DynamicImage::ImageRgb32F(decode_raw(path, max_dim)?.map_to_srgb()),
         }
     } else if RASTER_EXTENSIONS.contains(&ext.as_str()) {
         image::open(path)?
@@ -44,7 +44,7 @@ pub fn load_linear(path: &Path, max_dim: u32) -> Result<LinearImage> {
     let ext = ext_of(path);
     let orientation = read_exif(path).orientation;
     let lin = if is_raw_ext(&ext) {
-        match decode_raw(path) {
+        match decode_raw(path, max_dim) {
             Ok(lin) => {
                 apply_orientation(DynamicImage::ImageRgb32F(downscale_linear(lin, max_dim)), orientation).to_rgb32f()
             }

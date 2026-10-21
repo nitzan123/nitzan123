@@ -35,6 +35,7 @@ pub struct DevelopSettings {
     pub vignette: Vignette,
     pub geometry: Geometry,
     pub local: Vec<LocalAdjustment>,
+    pub lens: crate::lens::LensSettings,
 }
 
 impl Default for DevelopSettings {
@@ -51,6 +52,7 @@ impl Default for DevelopSettings {
             vignette: Default::default(),
             geometry: Default::default(),
             local: Vec::new(),
+            lens: Default::default(),
         }
     }
 }
