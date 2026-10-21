@@ -3,6 +3,7 @@
 
 import { api, urls } from "./api.js";
 import { store, emit, on, toast, promptText, el, fmt, LABELS } from "./state.js";
+import { openExportDialog } from "./export.js";
 
 const $ = (id) => document.getElementById(id);
 const META_H = 34;
@@ -133,6 +134,7 @@ function buildFilters() {
     if (ids.length) await api.addToCollection(id, ids);
     refreshSidebar();
   };
+  $("manage-export").onclick = () => openExportDialog();
   $("sort-key").onchange = (e) => patchQuery({ sort: e.target.value });
   $("sort-dir").onclick = () => patchQuery({ descending: !store.query.descending });
   $("thumb-size").oninput = (e) => {
@@ -322,6 +324,7 @@ async function renderProps() {
     ["Lens", asset.lens],
     ["Exposure", [asset.fNumber && `ƒ/${asset.fNumber.toFixed(1)}`, fmt.shutter(asset.exposureTime), asset.iso && `ISO ${asset.iso}`].filter(Boolean).join("  ")],
     ["Focal", asset.focalLength && `${Math.round(asset.focalLength)} mm`],
+    ["GPS", det.gps && `${det.gps[0].toFixed(5)}, ${det.gps[1].toFixed(5)}`],
     ["Path", asset.path],
   ].filter(([, v]) => v);
 

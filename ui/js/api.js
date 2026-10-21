@@ -40,7 +40,8 @@ export const api = {
   developAuto: (id) => invoke("develop_auto", { id }),
   developAutoWb: (id) => invoke("develop_auto_wb", { id }),
   developPreview: (id, settings, max) => invoke("develop_preview", { id, settings, max }),
-  export: (ids, dir, quality, maxDim) => invoke("export", { ids, dir, quality, maxDim }),
+  export: (ids, dir, quality, maxDim, caption = null) => invoke("export", { ids, dir, quality, maxDim, caption }),
+  captionPreview: (id, caption) => invoke("caption_preview", { id, caption }),
   pickFolder: (title) => invoke("plugin:dialog|open", { options: { directory: true, multiple: false, title } }),
   listen: (event, cb) => T.event.listen(event, (e) => cb(e.payload)),
 };

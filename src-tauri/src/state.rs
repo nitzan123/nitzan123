@@ -12,6 +12,7 @@ const SOURCE_CACHE_LEN: usize = 4;
 pub struct AppState {
     catalog: Mutex<Catalog>,
     pub thumbs: ThumbCache,
+    pub geocoder: prism_core::geocode::Geocoder,
     /// Recently decoded linear sources keyed by asset id, so slider drags
     /// don't re-decode the file.
     sources: Mutex<VecDeque<(i64, Arc<LinearImage>)>>,
@@ -22,6 +23,7 @@ impl AppState {
         Ok(Self {
             catalog: Mutex::new(Catalog::open(&data_dir.join("catalog.sqlite"))?),
             thumbs: ThumbCache::new(cache_dir.join("thumbs"))?,
+            geocoder: prism_core::geocode::Geocoder::new(),
             sources: Mutex::new(VecDeque::new()),
         })
     }

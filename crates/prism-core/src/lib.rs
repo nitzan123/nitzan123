@@ -5,8 +5,10 @@
 pub mod catalog;
 pub mod develop;
 pub mod error;
+pub mod geocode;
 pub mod imaging;
 pub mod metadata;
+pub mod overlay;
 pub mod raw;
 pub mod scan;
 pub mod search;

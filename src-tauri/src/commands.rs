@@ -9,10 +9,13 @@ use prism_core::develop::{
     auto::{auto_settings, auto_white_balance},
     render_to_rgb8,
 };
+use prism_core::geocode::{cache_key, format_coords};
+use prism_core::metadata::read_exif;
+use prism_core::overlay::{caption_lines, draw_caption, Caption};
 use prism_core::{xmp, Asset, Catalog, DevelopSettings, SearchQuery};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 type CmdResult<T> = Result<T, String>;
 
@@ -77,12 +80,18 @@ pub fn search(state: State<'_, AppState>, query: SearchQuery) -> CmdResult<Vec<A
 pub struct AssetDetails {
     asset: Asset,
     keywords: Vec<String>,
+    /// `[lat, lon]`, read live from the file.
+    gps: Option<[f64; 2]>,
 }
 
 #[tauri::command]
 pub fn asset_details(state: State<'_, AppState>, id: i64) -> CmdResult<AssetDetails> {
-    let cat = state.catalog();
-    Ok(AssetDetails { asset: cat.asset(id).map_err(s)?, keywords: cat.keywords_of(id).map_err(s)? })
+    let (asset, keywords) = {
+        let cat = state.catalog();
+        (cat.asset(id).map_err(s)?, cat.keywords_of(id).map_err(s)?)
+    };
+    let gps = read_exif(Path::new(&asset.path)).gps;
+    Ok(AssetDetails { asset, keywords, gps })
 }
 
 #[tauri::command]
@@ -278,29 +287,127 @@ pub async fn develop_preview(app: AppHandle, id: i64, settings: DevelopSettings,
     .map_err(s)?
 }
 
+/// Why a caption came out different from what was asked for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CaptionIssue {
+    NoGps,
+    LookupFailed,
+}
+
+/// Place line for a caption: catalog cache → OpenStreetMap → coordinates.
+fn resolve_place(state: &AppState, gps: Option<[f64; 2]>, language: &str) -> (Option<String>, Option<CaptionIssue>) {
+    let Some([lat, lon]) = gps else { return (None, Some(CaptionIssue::NoGps)) };
+    let key = format!("{}|{language}", cache_key(lat, lon));
+    if let Ok(Some(cached)) = state.catalog().place(&key) {
+        return (Some(cached.unwrap_or_else(|| format_coords(lat, lon))), None);
+    }
+    match state.geocoder.reverse(lat, lon, language) {
+        Ok(place) => {
+            let _ = state.catalog().set_place(&key, place.as_deref());
+            (Some(place.unwrap_or_else(|| format_coords(lat, lon))), None)
+        }
+        Err(_) => (Some(format_coords(lat, lon)), Some(CaptionIssue::LookupFailed)),
+    }
+}
+
+/// Burns the caption into `img`. Returns what (if anything) was missing.
+fn apply_caption(state: &AppState, asset: &Asset, img: &mut image::RgbImage, c: &Caption) -> Option<CaptionIssue> {
+    let (place, issue) = if c.location {
+        resolve_place(state, read_exif(Path::new(&asset.path)).gps, &c.place_language)
+    } else {
+        (None, None)
+    };
+    draw_caption(img, &caption_lines(c, asset.taken_at.as_deref(), place.as_deref()), c);
+    issue
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptionPreview {
+    data_url: String,
+    note: Option<String>,
+}
+
+/// The current photo with its develop settings and the caption, small.
+#[tauri::command]
+pub async fn caption_preview(app: AppHandle, id: i64, caption: Caption) -> CmdResult<CaptionPreview> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let (asset, settings) = {
+            let cat = state.catalog();
+            (cat.asset(id).map_err(s)?, cat.develop(id).map_err(s)?.unwrap_or_default())
+        };
+        let src = state.source(id, Path::new(&asset.path)).map_err(s)?;
+        let mut img = render_to_rgb8(&src, &settings);
+        if img.width().max(img.height()) > 900 {
+            img = image::imageops::thumbnail(&img, 900, 900 * img.height() / img.width().max(1));
+        }
+        let note = match apply_caption(&state, &asset, &mut img, &caption) {
+            Some(CaptionIssue::NoGps) => Some("This photo has no GPS location.".into()),
+            Some(CaptionIssue::LookupFailed) => Some("Place lookup failed (offline?) — coordinates shown.".into()),
+            None => None,
+        };
+        Ok(CaptionPreview {
+            data_url: format!(
+                "data:image/jpeg;base64,{}",
+                base64::engine::general_purpose::STANDARD.encode(encode_jpeg(&img, 85)?)
+            ),
+            note,
+        })
+    })
+    .await
+    .map_err(s)?
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExportResult {
     written: Vec<String>,
     failed: Vec<String>,
+    /// Human-readable caveats (missing GPS, lookup failures).
+    notes: Vec<String>,
 }
 
-/// Renders each asset at full (or `max_dim`) resolution to `dir`.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ExportProgress {
+    done: usize,
+    total: usize,
+}
+
+/// Renders each asset at full (or `max_dim`) resolution to `dir`,
+/// optionally burning in a caption.
 #[tauri::command]
-pub async fn export(app: AppHandle, ids: Vec<i64>, dir: String, quality: u8, max_dim: u32) -> CmdResult<ExportResult> {
+pub async fn export(
+    app: AppHandle,
+    ids: Vec<i64>,
+    dir: String,
+    quality: u8,
+    max_dim: u32,
+    caption: Option<Caption>,
+) -> CmdResult<ExportResult> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
         let dir = PathBuf::from(dir);
         std::fs::create_dir_all(&dir).map_err(s)?;
-        let mut res = ExportResult { written: Vec::new(), failed: Vec::new() };
-        for id in ids {
-            let job = || -> Result<PathBuf, String> {
+        let mut res = ExportResult { written: Vec::new(), failed: Vec::new(), notes: Vec::new() };
+        let (mut no_gps, mut lookup_failed) = (0, 0);
+        let total = ids.len();
+        for (i, id) in ids.into_iter().enumerate() {
+            let mut job = || -> Result<PathBuf, String> {
                 let (asset, settings) = {
                     let cat = state.catalog();
                     (cat.asset(id).map_err(s)?, cat.develop(id).map_err(s)?.unwrap_or_default())
                 };
                 let src = prism_core::imaging::load_linear(Path::new(&asset.path), max_dim).map_err(s)?;
-                let img = render_to_rgb8(&src, &settings);
+                let mut img = render_to_rgb8(&src, &settings);
+                if let Some(c) = &caption {
+                    match apply_caption(&state, &asset, &mut img, c) {
+                        Some(CaptionIssue::NoGps) => no_gps += 1,
+                        Some(CaptionIssue::LookupFailed) => lookup_failed += 1,
+                        None => {}
+                    }
+                }
                 let stem = Path::new(&asset.file_name).file_stem().unwrap_or_default().to_string_lossy().to_string();
                 let mut target = dir.join(format!("{stem}.jpg"));
                 let mut n = 1;
@@ -315,6 +422,13 @@ pub async fn export(app: AppHandle, ids: Vec<i64>, dir: String, quality: u8, max
                 Ok(p) => res.written.push(p.to_string_lossy().into()),
                 Err(e) => res.failed.push(format!("#{id}: {e}")),
             }
+            let _ = app.emit("export-progress", ExportProgress { done: i + 1, total });
+        }
+        if no_gps > 0 {
+            res.notes.push(format!("{no_gps} photo(s) have no GPS location, so no place was added"));
+        }
+        if lookup_failed > 0 {
+            res.notes.push(format!("place lookup failed for {lookup_failed} photo(s); coordinates were used instead"));
         }
         Ok(res)
     })

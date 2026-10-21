@@ -54,7 +54,22 @@ saturation, temperature, tint and blur.
 - Quick looks: Brighten sky, Dramatic sky, Blur background, Spotlight,
   Warm foreground.
 
-**Export**: full-size or resized JPEG with your develop settings applied.
+**Export**: full-size or resized JPEG with your develop settings applied,
+available from both Manage (batch export of the selection) and Develop.
+- **Text on photo**: optionally burn a caption into a corner of the exported
+  copies, with a live preview in the dialog. It can include:
+  - the capture date, in one of four formats;
+  - a **place name from the photo's GPS** (e.g. "Jerusalem, Israel");
+  - your own text (e.g. a copyright line).
+
+  Place names come from OpenStreetMap Nominatim and can be in English, Hebrew
+  or local names. Lookups respect Nominatim's rate limit (1/s) and are cached
+  in the catalog per ~100 m. The dialog states that coordinates are sent to
+  openstreetmap.org. Without internet the coordinates are written instead.
+  Photos without GPS simply skip the place line. Right-to-left text such as
+  Hebrew renders correctly. Originals are never changed.
+
+  ![Export with caption](docs/screenshots/export-caption.jpg)
 
 ## File formats
 
@@ -73,7 +88,7 @@ Requirements: Rust (stable) and the
 ```bash
 cargo run -p prism-studio --release                # start the app
 cargo run -p prism-studio --release -- ~/Pictures  # start and index a folder
-cargo test --workspace                             # 40 unit tests
+cargo test --workspace                             # 49 unit tests
 ```
 
 To build installers (`.msi`/`.exe`, `.dmg`, `.deb`/`.AppImage`):
@@ -95,7 +110,9 @@ cargo run --release --example develop_cli -- out/ photo1.NEF photo2.CR2
 ```
 crates/prism-core   UI-agnostic engine (all logic, all tests)
   catalog.rs        SQLite catalog: assets, folders, keywords, collections, saved searches, develop JSON
-  scan.rs           folder walk + EXIF (parallel)
+  scan.rs           folder walk + EXIF incl. GPS (parallel, tolerant of malformed EXIF)
+  geocode.rs        GPS → "City, Country" via OpenStreetMap (rate-limited, cached)
+  overlay.rs        caption text rendering (bundled DejaVu Sans Bold, bidi-aware)
   imaging.rs        single entry point for decoding (display path / linear path)
   raw.rs            embedded-preview extraction, RAW decode → linear sRGB, base curve
   thumbs.rs         content-keyed on-disk thumbnail cache (+ developed variants)
@@ -129,4 +146,6 @@ See [docs/architecture.md](docs/architecture.md) for the roadmap.
 ## Credits
 
 The RAW sample files used in screenshots and testing come from
-[raw.pixls.us](https://raw.pixls.us) (CC0).
+[raw.pixls.us](https://raw.pixls.us) (CC0). Caption font: DejaVu Sans Bold
+(see `crates/prism-core/assets/fonts/DejaVu-LICENSE.txt`). Place names:
+© OpenStreetMap contributors, ODbL.

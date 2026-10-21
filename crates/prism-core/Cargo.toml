@@ -16,6 +16,10 @@ serde_json = "1"
 walkdir = "2"
 thiserror = "1"
 blake3 = "1"
+ab_glyph = "0.2"
+unicode-bidi = "0.3"
+# Native roots so corporate/system CAs are honoured.
+ureq = { version = "2", default-features = false, features = ["tls", "native-certs", "gzip"] }
 
 [dev-dependencies]
 tempfile = "3"

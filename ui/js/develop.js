@@ -8,6 +8,7 @@ import { slider, section, tabs, drawHistogram, curveEditor } from "./controls.js
 import { renderFilmstrip } from "./view.js";
 import { setFocus } from "./manage.js";
 import * as edit from "./edit.js";
+import { openExportDialog } from "./export.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -364,27 +365,6 @@ async function autoWb() {
   }
 }
 
-// ---------------------------------------------------------------- export
-
-async function exportDialog() {
-  await flushSave();
-  const ids = store.selectedIds();
-  const dlg = $("export-dialog");
-  $("exp-count").textContent = `${ids.length} photo${ids.length === 1 ? "" : "s"} · develop settings applied · originals untouched`;
-  dlg.showModal();
-  const ok = await new Promise((r) => dlg.addEventListener("close", () => r(dlg.returnValue === "ok"), { once: true }));
-  if (!ok) return;
-  const dir = await api.pickFolder("Export to folder");
-  if (!dir) return;
-  toast(`Exporting ${ids.length}…`);
-  try {
-    const res = await api.export(ids, dir, Number($("exp-quality").value) || 92, Number($("exp-size").value) || 0);
-    toast(res.failed.length ? `Exported ${res.written.length}, failed ${res.failed.length}: ${res.failed[0]}` : `Exported ${res.written.length} to ${dir}`, res.failed.length > 0);
-  } catch (e) {
-    toast(String(e), true);
-  }
-}
-
 // ------------------------------------------------------------------ init
 
 /** Context handed to edit.js so it can mutate settings without cycles. */
@@ -407,7 +387,7 @@ export function init() {
     commit();
     refreshControls();
   };
-  $("dev-export").onclick = exportDialog;
+  $("dev-export").onclick = () => openExportDialog(flushSave);
   new ResizeObserver(() => edit.drawOverlay(ctx)).observe($("dev-stage"));
 
   on("mode", async ({ mode, prev }) => {

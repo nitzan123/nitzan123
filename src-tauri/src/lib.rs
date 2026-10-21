@@ -54,6 +54,7 @@ pub fn run() {
             commands::develop_auto_wb,
             commands::develop_preview,
             commands::export,
+            commands::caption_preview,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Prism Studio");

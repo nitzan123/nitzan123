@@ -77,6 +77,7 @@
           <button id="sort-dir" class="icon-btn" title="Sort direction">↑</button>
           <input id="thumb-size" type="range" min="120" max="360" value="190" aria-label="Thumbnail size" />
           <span id="count" class="muted"></span>
+          <button id="manage-export" class="btn small primary" title="Export selected photos">Export…</button>
         </div>
         <div id="grid" class="grid" tabindex="0" aria-label="Photos"><div id="grid-inner"></div></div>
         <div id="empty" class="empty" hidden>
@@ -139,10 +140,44 @@
     </form>
   </dialog>
   <dialog id="export-dialog">
-    <form method="dialog">
+    <form method="dialog" class="export-form">
       <h3>Export JPEG</h3>
-      <label>Quality <input id="exp-quality" type="number" min="10" max="100" value="92" /></label>
-      <label>Long edge (0 = full size) <input id="exp-size" type="number" min="0" max="20000" value="0" /></label>
+      <div class="row gap">
+        <label>Quality <input id="exp-quality" type="number" min="10" max="100" value="92" /></label>
+        <label>Long edge px (0 = full) <input id="exp-size" type="number" min="0" max="20000" value="0" /></label>
+      </div>
+      <label class="check"><input type="checkbox" id="cap-enabled" /> Add text on photo (date, place, custom)</label>
+      <div id="cap-options" class="cap-options" hidden>
+        <div class="cap-grid">
+          <label class="check"><input type="checkbox" id="cap-date" checked /> Date taken</label>
+          <select id="cap-date-format" aria-label="Date format">
+            <option value="long">17 May 2024, 14:03</option>
+            <option value="longDate">17 May 2024</option>
+            <option value="iso">2024-05-17 14:03</option>
+            <option value="numeric">17/05/2024</option>
+          </select>
+          <label class="check"><input type="checkbox" id="cap-location" checked /> Place (from GPS)</label>
+          <select id="cap-lang" aria-label="Place name language">
+            <option value="en">English names</option>
+            <option value="he">Hebrew names</option>
+            <option value="">Local names</option>
+          </select>
+          <label for="cap-text">Custom text</label>
+          <input id="cap-text" type="text" placeholder="e.g. © Your Name" />
+          <label for="cap-corner">Corner</label>
+          <select id="cap-corner">
+            <option value="bottomRight">Bottom right</option>
+            <option value="bottomLeft">Bottom left</option>
+            <option value="topRight">Top right</option>
+            <option value="topLeft">Top left</option>
+          </select>
+          <label for="cap-size">Text size</label>
+          <input id="cap-size" type="range" min="1.5" max="8" step="0.5" value="3" />
+        </div>
+        <p id="cap-privacy" class="hint">Place names are looked up on OpenStreetMap: each photo's GPS coordinates (rounded to ~100 m) are sent to openstreetmap.org. Results are cached. Without internet, coordinates are written instead.</p>
+        <img id="cap-preview" class="cap-preview" alt="Caption preview" hidden />
+        <p id="cap-note" class="hint"></p>
+      </div>
       <p class="muted" id="exp-count"></p>
       <menu><button value="cancel" class="btn">Cancel</button><button value="ok" class="btn primary">Choose folder & export</button></menu>
     </form>

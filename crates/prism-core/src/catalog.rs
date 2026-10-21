@@ -65,6 +65,10 @@ CREATE TABLE IF NOT EXISTS collection_assets (
     asset_id      INTEGER NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
     PRIMARY KEY (collection_id, asset_id)
 );
+CREATE TABLE IF NOT EXISTS places (
+    key  TEXT PRIMARY KEY,
+    name TEXT
+);
 CREATE TABLE IF NOT EXISTS saved_searches (
     id    INTEGER PRIMARY KEY,
     name  TEXT NOT NULL UNIQUE,
@@ -474,6 +478,18 @@ impl Catalog {
         Ok(())
     }
 
+    // ----------------------------------------------------------------- places
+
+    /// Cached reverse-geocoding result. `Some(None)` = looked up, no place.
+    pub fn place(&self, key: &str) -> Result<Option<Option<String>>> {
+        Ok(self.conn.query_row("SELECT name FROM places WHERE key = ?1", [key], |r| r.get(0)).optional()?)
+    }
+
+    pub fn set_place(&self, key: &str, name: Option<&str>) -> Result<()> {
+        self.conn.execute("INSERT OR REPLACE INTO places(key, name) VALUES (?1, ?2)", params![key, name])?;
+        Ok(())
+    }
+
     // ------------------------------------------------------------- similarity
 
     pub fn set_phash(&self, id: i64, hash: u64) -> Result<()> {
@@ -670,6 +686,12 @@ mod tests {
         assert_eq!(c.collections().unwrap()[0].count, 2);
         let q = SearchQuery { collection_id: Some(col), ..Default::default() };
         assert_eq!(c.search(&q).unwrap().len(), 2);
+
+        assert_eq!(c.place("1,2").unwrap(), None);
+        c.set_place("1,2", Some("Haifa, Israel")).unwrap();
+        c.set_place("0,0", None).unwrap();
+        assert_eq!(c.place("1,2").unwrap(), Some(Some("Haifa, Israel".into())));
+        assert_eq!(c.place("0,0").unwrap(), Some(None));
 
         c.save_search("five", &SearchQuery { min_rating: Some(5), ..Default::default() }).unwrap();
         assert_eq!(c.saved_searches().unwrap()[0].query.min_rating, Some(5));

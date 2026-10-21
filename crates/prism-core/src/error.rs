@@ -14,6 +14,8 @@ pub enum Error {
     Raw { path: PathBuf, reason: String },
     #[error("unsupported file: {0}")]
     Unsupported(PathBuf),
+    #[error("network error: {0}")]
+    Network(String),
     #[error("not found: {0}")]
     NotFound(String),
 }

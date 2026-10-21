@@ -6,7 +6,7 @@
 //! Every struct has `#[serde(default)]`, so older/partial JSON always loads.
 
 pub mod auto;
-mod buffer;
+pub(crate) mod buffer;
 pub mod masks;
 pub mod pipeline;
 
