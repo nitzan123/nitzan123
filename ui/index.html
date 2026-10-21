@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Prism Studio</title>
+  <link rel="stylesheet" href="styles.css" />
+  <script type="module" src="js/app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark" aria-hidden="true"></span>Prism Studio</div>
+    <nav class="modes" role="tablist" aria-label="Mode">
+      <button role="tab" data-mode="manage" aria-selected="true">Manage</button>
+      <button role="tab" data-mode="view">View</button>
+      <button role="tab" data-mode="develop">Develop</button>
+      <button role="tab" data-mode="edit">Edit</button>
+    </nav>
+    <div class="topbar-right">
+      <input id="quick-search" type="search" placeholder="Search name, caption, keyword…" aria-label="Quick search" />
+      <button id="add-folder" class="btn primary">Add folder</button>
+      <div id="progress" class="progress" hidden><div class="progress-bar"></div><span class="progress-text"></span></div>
+    </div>
+  </header>
+
+  <main>
+    <!-- ============================== MANAGE ============================== -->
+    <section id="mode-manage" class="mode active">
+      <aside class="sidebar left">
+        <div class="panel">
+          <h3>Folders</h3>
+          <ul id="folder-list" class="nav-list"></ul>
+        </div>
+        <div class="panel">
+          <h3>Filter</h3>
+          <div class="filter-row" id="rating-filter" aria-label="Minimum rating"></div>
+          <div class="filter-row" id="label-filter" aria-label="Colour label"></div>
+          <label class="check"><input type="checkbox" id="tagged-filter" /> Tagged only</label>
+          <label class="check"><input type="checkbox" id="developed-filter" /> Developed only</label>
+          <div class="date-row">
+            <input type="date" id="date-from" aria-label="Taken from" />
+            <input type="date" id="date-to" aria-label="Taken to" />
+          </div>
+          <input type="text" id="camera-filter" placeholder="Camera" aria-label="Camera" />
+          <div class="row gap">
+            <button id="clear-filters" class="btn small">Clear</button>
+            <button id="save-search" class="btn small">Save search…</button>
+          </div>
+        </div>
+        <div class="panel">
+          <h3>Saved searches</h3>
+          <ul id="saved-list" class="nav-list"></ul>
+        </div>
+        <div class="panel">
+          <h3>Collections <button id="new-collection" class="icon-btn" title="New collection">＋</button></h3>
+          <ul id="collection-list" class="nav-list"></ul>
+        </div>
+        <div class="panel">
+          <h3>Keywords</h3>
+          <ul id="keyword-list" class="nav-list"></ul>
+        </div>
+      </aside>
+
+      <div class="center">
+        <div class="toolbar">
+          <span id="breadcrumb" class="breadcrumb">All photos</span>
+          <span class="spacer"></span>
+          <label>Sort
+            <select id="sort-key">
+              <option value="name">Name</option>
+              <option value="takenAt">Date taken</option>
+              <option value="rating">Rating</option>
+              <option value="size">Size</option>
+              <option value="modified">Modified</option>
+            </select>
+          </label>
+          <button id="sort-dir" class="icon-btn" title="Sort direction">↑</button>
+          <input id="thumb-size" type="range" min="120" max="360" value="190" aria-label="Thumbnail size" />
+          <span id="count" class="muted"></span>
+        </div>
+        <div id="grid" class="grid" tabindex="0" aria-label="Photos"><div id="grid-inner"></div></div>
+        <div id="empty" class="empty" hidden>
+          <h2>No photos yet</h2>
+          <p>Add a folder to start. Originals are never modified — ratings, keywords and edits go to the catalog and XMP sidecars.</p>
+          <button class="btn primary" id="empty-add">Add folder</button>
+        </div>
+      </div>
+
+      <aside class="sidebar right">
+        <div id="props" class="panel props">
+          <p class="muted">Select a photo.</p>
+        </div>
+      </aside>
+    </section>
+
+    <!-- =============================== VIEW =============================== -->
+    <section id="mode-view" class="mode">
+      <div class="viewer" id="viewer">
+        <img id="view-img" alt="" draggable="false" />
+        <button class="nav prev" id="view-prev" aria-label="Previous">‹</button>
+        <button class="nav next" id="view-next" aria-label="Next">›</button>
+        <div class="view-info" id="view-info"></div>
+      </div>
+      <div class="filmstrip" id="view-strip"></div>
+    </section>
+
+    <!-- ============================== DEVELOP ============================= -->
+    <section id="mode-develop" class="mode">
+      <div class="center dev-center">
+        <div class="toolbar">
+          <span id="dev-name" class="breadcrumb"></span>
+          <span class="spacer"></span>
+          <button id="dev-before" class="btn small" title="Before / after (\)">Before</button>
+          <button id="dev-undo" class="btn small" title="Undo (Ctrl+Z)">Undo</button>
+          <button id="dev-redo" class="btn small" title="Redo (Ctrl+Shift+Z)">Redo</button>
+          <button id="dev-reset" class="btn small">Reset</button>
+          <button id="dev-export" class="btn small primary">Export…</button>
+          <span id="dev-status" class="muted"></span>
+        </div>
+        <div class="stage" id="dev-stage">
+          <img id="dev-img" alt="" draggable="false" />
+          <svg id="mask-overlay" class="mask-overlay"></svg>
+        </div>
+        <div class="filmstrip" id="dev-strip"></div>
+      </div>
+      <aside class="sidebar right wide">
+        <canvas id="histogram" width="300" height="90" aria-label="Histogram"></canvas>
+        <div id="dev-panel"></div>
+        <div id="edit-panel" hidden></div>
+      </aside>
+    </section>
+  </main>
+
+  <dialog id="prompt-dialog">
+    <form method="dialog">
+      <label id="prompt-label"></label>
+      <input id="prompt-input" type="text" />
+      <menu><button value="cancel" class="btn">Cancel</button><button value="ok" class="btn primary">OK</button></menu>
+    </form>
+  </dialog>
+  <dialog id="export-dialog">
+    <form method="dialog">
+      <h3>Export JPEG</h3>
+      <label>Quality <input id="exp-quality" type="number" min="10" max="100" value="92" /></label>
+      <label>Long edge (0 = full size) <input id="exp-size" type="number" min="0" max="20000" value="0" /></label>
+      <p class="muted" id="exp-count"></p>
+      <menu><button value="cancel" class="btn">Cancel</button><button value="ok" class="btn primary">Choose folder & export</button></menu>
+    </form>
+  </dialog>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+</body>
+</html>

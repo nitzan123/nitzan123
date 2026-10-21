@@ -1,0 +1,21 @@
+[package]
+name = "prism-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Catalog, metadata, thumbnail and non-destructive develop engine for Prism Studio"
+
+[dependencies]
+rusqlite = { version = "0.32", features = ["bundled"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "tiff", "webp", "gif", "bmp"] }
+kamadak-exif = "0.6"
+rawloader = "0.37"
+rayon = "1.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+walkdir = "2"
+thiserror = "1"
+blake3 = "1"
+
+[dev-dependencies]
+tempfile = "3"
