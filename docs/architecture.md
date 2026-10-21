@@ -41,6 +41,6 @@ Develop ─► develop_preview(id, settings, max) ─► cached linear source (L
 | ✓ | Embedding similarity + text search | TinyCLIP; brute-force cosine (ANN index when libraries exceed ~100k) |
 | ✓ | AI keywording | CLIP zero-shot over a fixed vocabulary |
 | 7 | Interactive crop handles, brush masks, heal/clone | Edit mode |
-| 8 | Presets (save/apply develop looks), batch rename/resize | |
-| 9 | Export: TIFF/PNG/WebP/AVIF, metadata embedding, watermark | |
+| ✓ | Presets (save/apply develop looks), batch rename/resize | `workflow.rs` |
+| 9 | Export: AVIF, 16-bit TIFF, metadata embedding, watermark | JPEG/PNG/TIFF/WebP done |
 | 10 | Catalog: folder watch (notify), offline volumes, calendar view | |

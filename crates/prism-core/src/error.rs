@@ -18,6 +18,8 @@ pub enum Error {
     Network(String),
     #[error("not found: {0}")]
     NotFound(String),
+    #[error("{0}")]
+    Invalid(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

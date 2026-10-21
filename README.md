@@ -83,8 +83,21 @@ saturation, temperature, tint and blur.
 - **AI masks** in Edit: Subject, Sky and Blur background. The mask is stored
   with the edit and follows rotation, crop and lens correction.
 
-**Export**: full-size or resized JPEG with your develop settings applied,
-available from both Manage (batch export of the selection) and Develop.
+**Workflow** (batch):
+- **Presets**: 8 built-in looks (Vivid, Black & white, Matte, Warm film, …)
+  plus your own (“Save current…” in Develop). A preset changes the look
+  only: each photo keeps its crop, lens correction and local adjustments,
+  so one preset can be applied to a whole shoot from Manage (Preset…).
+- **Batch rename** (Manage → Rename…) with a template such as
+  `{date}_{name}` or `Trip_{seq:3}`. Tokens: `{name}`, `{seq}`/`{seq:N}`,
+  `{date}`, `{time}`, `{year}`, `{month}`, `{day}`, `{camera}`, `{rating}`.
+  Dates come from EXIF, or the file's modified date if there is none. A
+  live preview shows every new name and flags clashes before anything moves;
+  sidecars move with their photos, and swaps inside one batch are safe.
+
+**Export**: JPEG, PNG, TIFF or WebP (lossless), full-size or resized, with
+your develop settings applied and an optional file-name template (same
+tokens as rename). Available from Manage (batch) and Develop.
 - **Text on photo**: optionally burn a caption into a corner of the exported
   copies, with a live preview in the dialog. It can include:
   - the capture date, in one of four formats;
@@ -117,7 +130,7 @@ Requirements: Rust (stable) and the
 ```bash
 cargo run -p prism-studio --release                # start the app
 cargo run -p prism-studio --release -- ~/Pictures  # start and index a folder
-cargo test --workspace                             # 76 tests (unit + robustness)
+cargo test --workspace                             # 80 tests (unit + robustness)
 ```
 
 To build installers (`.msi`/`.exe`, `.dmg`, `.deb`/`.AppImage`):
@@ -136,7 +149,7 @@ cargo run --release --example develop_cli -- out/ photo1.NEF photo2.CR2
 
 ## Quality
 
-- **76 automated tests**, including an end-to-end robustness suite. It uses a
+- **80 automated tests**, including an end-to-end robustness suite. It uses a
   generated library of awkward files: Hebrew folder and file names, spaces,
   EXIF-rotated portraits, 16-bit TIFF, alpha PNG, 1×1 images, empty, truncated
   and fake files. It checks that everything indexes, thumbnails, decodes and
@@ -169,6 +182,7 @@ crates/prism-core   UI-agnostic engine (all logic, all tests)
   similarity.rs     dHash + Hamming distance
   xmp.rs            sidecar read/write
   develop/          settings model, render pipeline, masks, auto
+  workflow.rs       presets, file-name templates, safe batch rename, export encoders
   ai/               model download, faces (YuNet/SFace), CLIP + tokenizer, U²-Netp, keyword vocabulary
 src-tauri           Tauri shell: commands, background indexer and AI job, prism:// image protocol
 ui                  vanilla ES modules, no build step
@@ -191,7 +205,10 @@ noise reduction and sharpening.
   the main subject may be partly treated as background. Keyword suggestions
   are limited to the built-in vocabulary. Analysis takes about 0.3 s per
   photo plus about 3 s per AI mask.
-- Exports are JPEG only. HEIC and CR3 full decode are not supported.
+- WebP export is lossless only (the pure-Rust encoder has no lossy mode);
+  exports are 8-bit. Renames can't be undone from the app, which is why the
+  dialog previews every name first. HEIC and CR3 full decode are not
+  supported.
 
 See [docs/architecture.md](docs/architecture.md) for the roadmap.
 

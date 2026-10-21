@@ -84,6 +84,8 @@
           <button id="sort-dir" class="icon-btn" title="Sort direction">↑</button>
           <input id="thumb-size" type="range" min="120" max="360" value="190" aria-label="Thumbnail size" />
           <span id="count" class="muted"></span>
+          <button id="manage-preset" class="btn small" title="Apply a develop preset to the selected photos">Preset…</button>
+          <button id="manage-rename" class="btn small" title="Rename the selected files">Rename…</button>
           <button id="manage-export" class="btn small primary" title="Export selected photos">Export…</button>
         </div>
         <div id="grid" class="grid" tabindex="0" aria-label="Photos"><div id="grid-inner"></div></div>
@@ -148,11 +150,20 @@
   </dialog>
   <dialog id="export-dialog">
     <form method="dialog" class="export-form">
-      <h3>Export JPEG</h3>
+      <h3>Export</h3>
       <div class="row gap">
-        <label>Quality <input id="exp-quality" type="number" min="10" max="100" value="92" /></label>
+        <label>Format
+          <select id="exp-format">
+            <option value="jpeg">JPEG</option>
+            <option value="png">PNG</option>
+            <option value="tiff">TIFF</option>
+            <option value="webp">WebP (lossless)</option>
+          </select>
+        </label>
+        <label id="exp-quality-wrap">Quality <input id="exp-quality" type="number" min="10" max="100" value="92" /></label>
         <label>Long edge px (0 = full) <input id="exp-size" type="number" min="0" max="20000" value="0" /></label>
       </div>
+      <label class="block">File names <input id="exp-names" type="text" placeholder="Original names — or e.g. {date}_{seq:3}" /></label>
       <label class="check"><input type="checkbox" id="cap-enabled" /> Add text on photo (date, place, custom)</label>
       <div id="cap-options" class="cap-options" hidden>
         <div class="cap-grid">
@@ -187,6 +198,28 @@
       </div>
       <p class="muted" id="exp-count"></p>
       <menu><button value="ok" class="btn primary">Choose folder & export</button><button value="cancel" class="btn">Cancel</button></menu>
+    </form>
+  </dialog>
+  <dialog id="preset-dialog" aria-labelledby="preset-title">
+    <form method="dialog">
+      <h3 id="preset-title">Apply preset</h3>
+      <p class="hint">Replaces the look (tone, colour, detail, effects). Each photo keeps its own crop, lens correction and local adjustments.</p>
+      <select id="preset-select" aria-label="Preset"></select>
+      <p class="muted" id="preset-count"></p>
+      <menu><button value="ok" class="btn primary">Apply</button><button value="cancel" class="btn">Cancel</button></menu>
+    </form>
+  </dialog>
+  <dialog id="rename-dialog" aria-labelledby="rename-title">
+    <form method="dialog" class="rename-form">
+      <h3 id="rename-title">Rename files</h3>
+      <div class="row gap">
+        <label class="grow">Template <input id="rename-template" type="text" value="{date}_{name}" /></label>
+        <label>Start at <input id="rename-start" type="number" min="0" max="999999" value="1" /></label>
+      </div>
+      <p class="hint">Tokens: <code>{name}</code> <code>{seq}</code> <code>{seq:3}</code> <code>{date}</code> <code>{time}</code> <code>{year}</code> <code>{month}</code> <code>{day}</code> <code>{camera}</code> <code>{rating}</code>. Extensions and XMP sidecars are kept with each file.</p>
+      <div id="rename-preview" class="rename-preview"></div>
+      <p class="muted" id="rename-summary"></p>
+      <menu><button value="ok" class="btn primary" id="rename-ok">Rename</button><button value="cancel" class="btn">Cancel</button></menu>
     </form>
   </dialog>
   <dialog id="help-dialog" aria-labelledby="help-title">

@@ -3,12 +3,13 @@
 // right-hand panel for local adjustments (see edit.js).
 
 import { api } from "./api.js";
-import { store, emit, on, el, toast } from "./state.js";
+import { store, emit, on, el, toast, promptText } from "./state.js";
 import { slider, section, tabs, drawHistogram, curveEditor } from "./controls.js";
 import { renderFilmstrip } from "./view.js";
 import { setFocus } from "./manage.js";
 import * as edit from "./edit.js";
 import { openExportDialog } from "./export.js";
+import { loadPresets, applyLook } from "./workflow.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -278,6 +279,7 @@ function buildPanel() {
       el("button", { class: "btn small", onclick: autoWb, title: "Conservative automatic white balance" }, "Auto WB"),
       btn("Copy", copySettings, "Copy develop settings"),
       btn("Paste", pasteSettings, "Paste develop settings to the selection")),
+    section("Presets", false, presetGrid),
     section("White balance", true,
       bind("whiteBalance.temperature", { label: "Temperature", min: -100, max: 100 }),
       bind("whiteBalance.tint", { label: "Tint", min: -100, max: 100 })),
@@ -341,6 +343,7 @@ function buildPanel() {
       bind("lens.manualCaBlue", { label: "Blue fringe", min: -100, max: 100 }),
       el("p", { class: "hint" }, "Profiles: lensfun database (CC BY-SA 3.0), downloaded on request.")),
   );
+  refreshPresets();
 }
 
 // -------------------------------------------------------- lens correction
@@ -398,6 +401,56 @@ async function toggleLensProfile(on) {
     toast(String(e), true);
   }
   refreshLensUi();
+}
+
+// ---------------------------------------------------------------- presets
+
+const presetGrid = el("div", { class: "preset-grid" });
+
+async function refreshPresets(force = false) {
+  let presets;
+  try {
+    presets = await loadPresets(force);
+  } catch (e) {
+    presetGrid.replaceChildren(el("p", { class: "hint" }, `Presets unavailable: ${e}`));
+    return;
+  }
+  presetGrid.replaceChildren(
+    ...presets.map((p) => el("div", { class: "preset" },
+      el("button", { type: "button", class: "btn small apply", title: `Apply “${p.name}” (keeps crop, lens and masks)`, onclick: () => applyPreset(p) }, p.name),
+      p.id == null ? null : el("button", { type: "button", class: "del", title: "Delete preset", "aria-label": `Delete ${p.name}`, onclick: () => deletePreset(p) }, "×"))),
+    el("button", { type: "button", class: "btn small", onclick: savePreset, title: "Save this photo's look (not crop, lens or masks)" }, "＋ Save current…"),
+  );
+}
+
+function applyPreset(p) {
+  if (dev.id == null) return;
+  change((s) => Object.assign(s, applyLook(s, Object.assign(defaults(), p.settings))));
+  commit();
+  refreshControls();
+  toast(`“${p.name}” applied`);
+}
+
+async function savePreset() {
+  const name = await promptText("Preset name");
+  if (!name) return;
+  try {
+    await api.savePreset(name, dev.s);
+    await refreshPresets(true);
+    toast(`Preset “${name}” saved`);
+  } catch (e) {
+    toast(String(e), true);
+  }
+}
+
+async function deletePreset(p) {
+  if (!confirm(`Delete preset “${p.name}”?`)) return;
+  try {
+    await api.deletePreset(p.id);
+    await refreshPresets(true);
+  } catch (e) {
+    toast(String(e), true);
+  }
 }
 
 // -------------------------------------------------------- copy / paste

@@ -243,3 +243,20 @@ dialog menu { display: flex; flex-direction: row-reverse; justify-content: flex-
 .face-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin: 6px 0; }
 .face-row button { background: none; border: 0; padding: 0; cursor: pointer; color: inherit; font-size: 11px; text-align: center; }
 .chip.suggest { border-style: dashed; }
+
+/* ---------------------------------------------------------- workflow */
+label.block { display: flex; flex-direction: column; gap: 4px; margin: 8px 0; }
+.grow { flex: 1; display: flex; flex-direction: column; gap: 4px; }
+.rename-form { width: min(640px, 90vw); }
+.rename-preview { max-height: 260px; overflow: auto; border: 1px solid var(--line, #333); border-radius: 6px; font-size: 12px; }
+.rename-preview table { width: 100%; border-collapse: collapse; }
+.rename-preview td { padding: 3px 8px; border-bottom: 1px solid var(--line, #333); word-break: break-all; }
+.rename-preview td.arrow { color: var(--muted, #888); width: 1em; }
+.rename-preview tr.problem td:last-child { color: var(--danger, #e5534b); }
+.rename-preview tr.same td { opacity: .5; }
+.preset-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.preset-grid .preset { position: relative; }
+.preset-grid .preset button.apply { width: 100%; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.preset-grid .preset button.del { position: absolute; right: 2px; top: 50%; transform: translateY(-50%); padding: 0 6px; background: none; border: 0; color: var(--muted, #888); cursor: pointer; }
+.preset-grid .preset button.del:hover { color: var(--danger, #e5534b); }
+#preset-select { width: 100%; margin: 8px 0; }

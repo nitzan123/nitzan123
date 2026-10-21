@@ -34,7 +34,7 @@ export async function reload({ keepFocus = true } = {}) {
   store.focus = focusedId != null ? store.assets.findIndex((a) => a.id === focusedId) : -1;
   if (store.focus < 0 && store.assets.length) store.focus = 0;
   $("count").textContent = `${store.assets.length} photo${store.assets.length === 1 ? "" : "s"}`;
-  $("manage-export").disabled = store.assets.length === 0;
+  for (const b of ["manage-export", "manage-preset", "manage-rename"]) $(b).disabled = store.assets.length === 0;
   $("breadcrumb").textContent = store.scope;
   $("empty").hidden = store.assets.length > 0 || !!hasFilters();
   relayout(true);

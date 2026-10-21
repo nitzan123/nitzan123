@@ -25,6 +25,11 @@ export const store = {
     if (this.selected.size) return [...this.selected];
     return this.current ? [this.current.id] : [];
   },
+  /** Selected ids in grid order, so numbered names follow what the user sees. */
+  selectedInOrder() {
+    const sel = new Set(this.selectedIds());
+    return this.assets.filter((a) => sel.has(a.id)).map((a) => a.id);
+  },
   replaceAsset(a) {
     const i = this.assets.findIndex((x) => x.id === a.id);
     if (i >= 0) this.assets[i] = a;

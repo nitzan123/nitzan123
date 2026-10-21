@@ -1,6 +1,7 @@
-// Export dialog (shared by Manage and Develop): JPEG options plus an
-// optional caption burned into the exported copies — capture date, place
-// name from GPS (OpenStreetMap) and custom text. Originals are untouched.
+// Export dialog (shared by Manage and Develop): format, size and file-name
+// template, plus an optional caption burned into the exported copies —
+// capture date, place name from GPS (OpenStreetMap) and custom text.
+// Originals are untouched.
 
 import { api } from "./api.js";
 import { store, toast } from "./state.js";
@@ -9,6 +10,8 @@ const $ = (id) => document.getElementById(id);
 const PREFS_KEY = "prism.export";
 
 const DEFAULT_PREFS = {
+  format: "jpeg",
+  names: "",
   quality: 92,
   size: 0,
   caption: false,
@@ -39,6 +42,8 @@ function savePrefs(p) {
 
 function readForm() {
   return {
+    format: $("exp-format").value,
+    names: $("exp-names").value.trim(),
     quality: Math.round(Math.min(100, Math.max(10, Number($("exp-quality").value) || 92))),
     size: Math.round(Math.min(20000, Math.max(0, Number($("exp-size").value) || 0))),
     caption: $("cap-enabled").checked,
@@ -53,6 +58,8 @@ function readForm() {
 }
 
 function writeForm(p) {
+  $("exp-format").value = p.format;
+  $("exp-names").value = p.names;
   $("exp-quality").value = p.quality;
   $("exp-size").value = p.size;
   $("cap-enabled").checked = p.caption;
@@ -85,6 +92,7 @@ let previewTimer = null;
 
 function syncCaptionUi() {
   const p = readForm();
+  $("exp-quality-wrap").hidden = p.format !== "jpeg";
   $("cap-options").hidden = !p.caption;
   $("cap-privacy").hidden = !(p.caption && p.location);
   clearTimeout(previewTimer);
@@ -119,7 +127,7 @@ let wired = false;
 function wire() {
   if (wired) return;
   wired = true;
-  for (const id of ["cap-enabled", "cap-date", "cap-date-format", "cap-location", "cap-lang", "cap-corner", "cap-size"]) {
+  for (const id of ["exp-format", "cap-enabled", "cap-date", "cap-date-format", "cap-location", "cap-lang", "cap-corner", "cap-size"]) {
     $(id).addEventListener("input", syncCaptionUi);
   }
   $("cap-text").addEventListener("input", syncCaptionUi);
@@ -132,11 +140,11 @@ function wire() {
 export async function openExportDialog(beforeExport = async () => {}) {
   wire();
   await beforeExport();
-  const ids = store.selectedIds();
+  const ids = store.selectedInOrder();
   if (!ids.length) return toast("Select photos to export");
   const dlg = $("export-dialog");
   writeForm(loadPrefs());
-  $("exp-count").textContent = `${ids.length} photo${ids.length === 1 ? "" : "s"} · develop settings applied · originals untouched`;
+  $("exp-count").textContent = `${ids.length} photo${ids.length === 1 ? "" : "s"} · develop settings applied · originals untouched · name tokens: {name} {seq:3} {date} {time} {camera}`;
   syncCaptionUi();
   dlg.returnValue = ""; // Esc must not reuse the previous dialog's "ok"
   dlg.showModal();
@@ -148,7 +156,13 @@ export async function openExportDialog(beforeExport = async () => {}) {
   if (!dir) return;
   toast(`Exporting ${ids.length}…`);
   try {
-    const res = await api.export(ids, dir, prefs.quality, prefs.size, captionFrom(prefs));
+    const res = await api.export(ids, dir, {
+      format: prefs.format,
+      quality: prefs.quality,
+      maxDim: prefs.size,
+      caption: captionFrom(prefs),
+      nameTemplate: prefs.names || null,
+    });
     const parts = [`Exported ${res.written.length} to ${dir}`];
     if (res.failed.length) parts.push(`failed ${res.failed.length}: ${res.failed[0]}`);
     parts.push(...res.notes);

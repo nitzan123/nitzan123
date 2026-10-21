@@ -12,8 +12,12 @@ use prism_core::develop::{
 use prism_core::geocode::{cache_key, format_coords};
 use prism_core::metadata::read_exif;
 use prism_core::overlay::{caption_lines, draw_caption, Caption};
+use prism_core::workflow::{
+    apply_preset, builtin_presets, execute_renames, look_of, plan_renames, unique_path, ExportFormat, NameTemplate,
+    Preset, RenamePlan,
+};
 use prism_core::{xmp, Asset, Catalog, DevelopSettings, SearchQuery};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -394,17 +398,34 @@ struct ExportProgress {
     total: usize,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ExportOptions {
+    format: ExportFormat,
+    /// JPEG quality 10…100.
+    quality: u8,
+    /// Long edge in pixels; 0 = full size.
+    max_dim: u32,
+    caption: Option<Caption>,
+    /// File-name template (see `workflow::NameTemplate`); empty = original names.
+    name_template: Option<String>,
+}
+
+impl Default for ExportOptions {
+    fn default() -> Self {
+        Self { format: ExportFormat::Jpeg, quality: 92, max_dim: 0, caption: None, name_template: None }
+    }
+}
+
 /// Renders each asset at full (or `max_dim`) resolution to `dir`,
 /// optionally burning in a caption.
 #[tauri::command]
-pub async fn export(
-    app: AppHandle,
-    ids: Vec<i64>,
-    dir: String,
-    quality: u8,
-    max_dim: u32,
-    caption: Option<Caption>,
-) -> CmdResult<ExportResult> {
+pub async fn export(app: AppHandle, ids: Vec<i64>, dir: String, options: ExportOptions) -> CmdResult<ExportResult> {
+    let ExportOptions { format, quality, max_dim, caption, name_template } = options;
+    let template = match name_template.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+        Some(t) => Some(NameTemplate::parse(t).map_err(s)?),
+        None => None,
+    };
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
         let dir = PathBuf::from(dir);
@@ -427,14 +448,12 @@ pub async fn export(
                         None => {}
                     }
                 }
-                let stem = Path::new(&asset.file_name).file_stem().unwrap_or_default().to_string_lossy().to_string();
-                let mut target = dir.join(format!("{stem}.jpg"));
-                let mut n = 1;
-                while target.exists() {
-                    target = dir.join(format!("{stem}-{n}.jpg"));
-                    n += 1;
-                }
-                std::fs::write(&target, encode_jpeg(&img, quality.clamp(10, 100))?).map_err(s)?;
+                let stem = match &template {
+                    Some(t) => t.render(&asset, i + 1),
+                    None => Path::new(&asset.file_name).file_stem().unwrap_or_default().to_string_lossy().to_string(),
+                };
+                let target = unique_path(&dir, &stem, format.extension());
+                std::fs::write(&target, format.encode(&img, quality).map_err(s)?).map_err(s)?;
                 Ok(target)
             };
             match job() {
@@ -453,6 +472,101 @@ pub async fn export(
     })
     .await
     .map_err(s)?
+}
+
+// ----------------------------------------------------------------- presets
+
+/// Built-in presets first, then the user's.
+#[tauri::command]
+pub fn presets(state: State<'_, AppState>) -> CmdResult<Vec<Preset>> {
+    let mut out = builtin_presets();
+    out.extend(state.catalog().presets().map_err(s)?);
+    Ok(out)
+}
+
+/// Saves the look of `settings` (not crop, lens or masks) as a preset.
+#[tauri::command]
+pub fn save_preset(state: State<'_, AppState>, name: String, settings: DevelopSettings) -> CmdResult<i64> {
+    state.catalog().save_preset(&name, &look_of(&settings)).map_err(s)
+}
+
+#[tauri::command]
+pub fn delete_preset(state: State<'_, AppState>, id: i64) -> CmdResult<()> {
+    state.catalog().delete_preset(id).map_err(s)
+}
+
+/// Applies a preset's look to every photo in `ids`, keeping each photo's
+/// crop, lens correction and local adjustments.
+#[tauri::command]
+pub fn apply_preset_to(state: State<'_, AppState>, ids: Vec<i64>, settings: DevelopSettings) -> CmdResult<()> {
+    let cat = state.catalog();
+    for &id in &ids {
+        let base = cat.develop(id).map_err(s)?.unwrap_or_default();
+        cat.set_develop(id, Some(&apply_preset(&base, &settings))).map_err(s)?;
+    }
+    sync_sidecars(&cat, &ids);
+    Ok(())
+}
+
+// ------------------------------------------------------------ batch rename
+
+fn rename_plans(state: &AppState, ids: &[i64], template: &str, start: usize) -> CmdResult<Vec<RenamePlan>> {
+    let t = NameTemplate::parse(template).map_err(s)?;
+    let assets: Vec<Asset> = {
+        let cat = state.catalog();
+        ids.iter().map(|&id| cat.asset(id)).collect::<prism_core::Result<_>>().map_err(s)?
+    };
+    let mut plans = plan_renames(&assets, &t, start);
+    if !t.has_unique_part() && plans.len() > 1 {
+        for p in plans.iter_mut().skip(1) {
+            p.problem.get_or_insert_with(|| "add {name} or {seq} so names are unique".into());
+        }
+    }
+    Ok(plans)
+}
+
+#[tauri::command]
+pub fn rename_preview(
+    state: State<'_, AppState>,
+    ids: Vec<i64>,
+    template: String,
+    start: usize,
+) -> CmdResult<Vec<RenamePlan>> {
+    rename_plans(&state, &ids, &template, start)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenameResult {
+    renamed: usize,
+    failed: Vec<String>,
+}
+
+/// Renames files on disk (with their sidecars) and updates the catalog.
+/// Only plans without problems run; the rest are reported.
+#[tauri::command]
+pub async fn rename_apply(app: AppHandle, ids: Vec<i64>, template: String, start: usize) -> CmdResult<RenameResult> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let plans = rename_plans(&state, &ids, &template, start)?;
+        let mut failed: Vec<String> =
+            plans.iter().filter_map(|p| p.problem.as_ref().map(|e| format!("{}: {e}", file_name(&p.from)))).collect();
+        let (ok, errs) = execute_renames(&plans);
+        let cat = state.catalog();
+        for (id, path) in &ok {
+            if let Err(e) = cat.rename_asset(*id, path) {
+                failed.push(format!("{path}: {e}"));
+            }
+        }
+        failed.extend(errs.iter().map(|(id, e)| format!("#{id}: {e}")));
+        Ok(RenameResult { renamed: ok.len(), failed })
+    })
+    .await
+    .map_err(s)?
+}
+
+fn file_name(p: &str) -> String {
+    Path::new(p).file_name().map(|n| n.to_string_lossy().into()).unwrap_or_else(|| p.into())
 }
 
 // ------------------------------------------------------------------- lenses

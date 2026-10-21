@@ -94,6 +94,11 @@ CREATE TABLE IF NOT EXISTS places (
     key  TEXT PRIMARY KEY,
     name TEXT
 );
+CREATE TABLE IF NOT EXISTS presets (
+    id       INTEGER PRIMARY KEY,
+    name     TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    settings TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS saved_searches (
     id    INTEGER PRIMARY KEY,
     name  TEXT NOT NULL UNIQUE,
@@ -576,6 +581,46 @@ impl Catalog {
         Ok(())
     }
 
+    // ---------------------------------------------------------------- presets
+
+    /// Saves (or overwrites, by name) a user develop preset.
+    pub fn save_preset(&self, name: &str, settings: &DevelopSettings) -> Result<i64> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(Error::Invalid("preset name is empty".into()));
+        }
+        self.conn.execute(
+            "INSERT INTO presets(name, settings) VALUES (?1, ?2) \
+             ON CONFLICT(name) DO UPDATE SET settings = excluded.settings",
+            params![name, serde_json::to_string(settings)?],
+        )?;
+        Ok(self.conn.query_row("SELECT id FROM presets WHERE name = ?1", [name], |r| r.get(0))?)
+    }
+
+    pub fn presets(&self) -> Result<Vec<crate::workflow::Preset>> {
+        let mut st = self.conn.prepare("SELECT id, name, settings FROM presets ORDER BY name COLLATE NOCASE")?;
+        let rows = st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (id, name, json) = row?;
+            out.push(crate::workflow::Preset { id: Some(id), name, settings: serde_json::from_str(&json)? });
+        }
+        Ok(out)
+    }
+
+    pub fn delete_preset(&self, id: i64) -> Result<()> {
+        self.conn.execute("DELETE FROM presets WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
+    /// Records that an asset's file was renamed inside its folder.
+    pub fn rename_asset(&self, id: i64, new_path: &str) -> Result<()> {
+        let p = Path::new(new_path);
+        let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        self.conn.execute("UPDATE assets SET path = ?2, file_name = ?3 WHERE id = ?1", params![id, new_path, name])?;
+        Ok(())
+    }
+
     // ---------------------------------------------------------------- develop
 
     pub fn develop(&self, id: i64) -> Result<Option<DevelopSettings>> {
@@ -1052,6 +1097,20 @@ mod tests {
 
         c.save_search("five", &SearchQuery { min_rating: Some(5), ..Default::default() }).unwrap();
         assert_eq!(c.saved_searches().unwrap()[0].query.min_rating, Some(5));
+
+        let mut look = DevelopSettings::default();
+        look.light.contrast = 30.0;
+        let pid = c.save_preset(" Punchy ", &look).unwrap();
+        look.light.contrast = 40.0;
+        assert_eq!(c.save_preset("punchy", &look).unwrap(), pid, "same name (any case) overwrites");
+        assert_eq!(c.presets().unwrap()[0].settings.light.contrast, 40.0);
+        assert!(c.save_preset("  ", &look).is_err());
+        c.delete_preset(pid).unwrap();
+        assert!(c.presets().unwrap().is_empty());
+
+        c.rename_asset(a, "/p/renamed.jpg").unwrap();
+        let ra = c.asset(a).unwrap();
+        assert_eq!((ra.path.as_str(), ra.file_name.as_str()), ("/p/renamed.jpg", "renamed.jpg"));
 
         c.set_phash(a, 0b1111).unwrap();
         c.set_phash(b, 0b1110).unwrap();
