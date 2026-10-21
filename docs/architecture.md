@@ -43,4 +43,4 @@ Develop ─► develop_preview(id, settings, max) ─► cached linear source (L
 | 7 | Interactive crop handles, brush masks, heal/clone | Edit mode |
 | ✓ | Presets (save/apply develop looks), batch rename/resize | `workflow.rs` |
 | 9 | Export: AVIF, 16-bit TIFF, metadata embedding, watermark | JPEG/PNG/TIFF/WebP done |
-| 10 | Catalog: folder watch (notify), offline volumes, calendar view | |
+| 10 | Catalog: folder watch (notify), offline volumes | folder tree, calendar and map views done |

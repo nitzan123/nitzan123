@@ -13,12 +13,14 @@ export const urls = {
   view: (a, max = 2560) => `${PROTO}view/${a.id}?max=${max}&m=${a.mtime}&v=${bust.get(a.id) || 0}`,
   invalidate: (id) => bust.set(id, (bust.get(id) || 0) + 1),
   face: (faceId) => `${PROTO}face/${faceId}`,
+  tile: (z, x, y) => `${PROTO}tile/${z}/${x}/${y}`,
 };
 
 export const api = {
   addFolder: (path, recursive = true) => invoke("add_folder", { path, recursive }),
   rescanFolder: (path) => invoke("rescan_folder", { path }),
   folders: () => invoke("folders"),
+  calendar: () => invoke("calendar"),
   search: (query) => invoke("search", { query }),
   details: (id) => invoke("asset_details", { id }),
   setRating: (ids, rating) => invoke("set_rating", { ids, rating }),

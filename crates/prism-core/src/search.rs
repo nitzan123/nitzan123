@@ -9,6 +9,12 @@ pub struct SearchQuery {
     pub text: Option<String>,
     /// Only assets directly inside this folder.
     pub folder: Option<String>,
+    /// Assets in this folder or any folder below it.
+    pub folder_tree: Option<String>,
+    /// Only photos with (`true`) or without (`false`) a GPS position.
+    pub has_gps: Option<bool>,
+    /// Only photos with (`true`) or without (`false`) a capture date.
+    pub dated: Option<bool>,
     pub min_rating: Option<u8>,
     /// Exact colour label (1..=5). 0 means "no label".
     pub color_label: Option<u8>,

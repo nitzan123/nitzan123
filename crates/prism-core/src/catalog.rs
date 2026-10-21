@@ -11,7 +11,7 @@ use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS folders (
@@ -42,7 +42,11 @@ CREATE TABLE IF NOT EXISTS assets (
     tagged        INTEGER NOT NULL DEFAULT 0,
     caption       TEXT,
     phash         INTEGER,
-    develop       TEXT
+    develop       TEXT,
+    gps_lat       REAL,
+    gps_lon       REAL,
+    -- 1 once GPS was read from the file (catalogs from v1 are backfilled).
+    gps_scanned   INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS assets_folder ON assets(folder_id);
 CREATE INDEX IF NOT EXISTS assets_taken ON assets(taken_at);
@@ -132,11 +136,13 @@ pub struct Asset {
     pub tagged: bool,
     pub caption: Option<String>,
     pub developed: bool,
+    /// `[latitude, longitude]` in degrees, from EXIF.
+    pub gps: Option<[f64; 2]>,
 }
 
 const ASSET_COLUMNS: &str = "a.id, a.path, f.path, a.file_name, a.ext, a.size, a.mtime, a.width, a.height, \
     a.taken_at, a.camera_make, a.camera_model, a.lens, a.iso, a.f_number, a.exposure_time, a.focal_length, \
-    a.orientation, a.rating, a.color_label, a.tagged, a.caption, a.develop IS NOT NULL";
+    a.orientation, a.rating, a.color_label, a.tagged, a.caption, a.develop IS NOT NULL, a.gps_lat, a.gps_lon";
 
 fn asset_from_row(r: &Row<'_>) -> rusqlite::Result<Asset> {
     Ok(Asset {
@@ -163,6 +169,10 @@ fn asset_from_row(r: &Row<'_>) -> rusqlite::Result<Asset> {
         tagged: r.get(20)?,
         caption: r.get(21)?,
         developed: r.get(22)?,
+        gps: match (r.get::<_, Option<f64>>(23)?, r.get::<_, Option<f64>>(24)?) {
+            (Some(lat), Some(lon)) => Some([lat, lon]),
+            _ => None,
+        },
     })
 }
 
@@ -252,6 +262,20 @@ impl Upsert {
     }
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DayCount {
+    pub day: String,
+    pub count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Calendar {
+    pub days: Vec<DayCount>,
+    pub undated: i64,
+}
+
 pub struct Catalog {
     conn: Connection,
 }
@@ -271,6 +295,7 @@ impl Catalog {
     fn init(conn: Connection) -> Result<Self> {
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA synchronous=NORMAL;")?;
         conn.execute_batch(SCHEMA)?;
+        migrate(&conn)?;
         let v: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
         if v < SCHEMA_VERSION {
             conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION}"))?;
@@ -387,6 +412,21 @@ impl Catalog {
 
         if let Some(folder) = &q.folder {
             sql += &format!(" AND f.path = {}", arg(V::Text(folder.clone()), &mut args));
+        }
+        if let Some(root) = &q.folder_tree {
+            let root = root.trim_end_matches(['/', '\\']);
+            let eq = arg(V::Text(root.to_string()), &mut args);
+            let slash = arg(V::Text(format!("{}/%", like_escape(root))), &mut args);
+            // Windows separators: an escaped `\` followed by the wildcard.
+            let back = arg(V::Text(format!("{}\\\\%", like_escape(root))), &mut args);
+            sql +=
+                &format!(" AND (f.path = {eq} OR f.path LIKE {slash} ESCAPE '\\' OR f.path LIKE {back} ESCAPE '\\')");
+        }
+        if let Some(g) = q.has_gps {
+            sql += if g { " AND a.gps_lat IS NOT NULL" } else { " AND a.gps_lat IS NULL" };
+        }
+        if let Some(d) = q.dated {
+            sql += if d { " AND a.taken_at IS NOT NULL" } else { " AND a.taken_at IS NULL" };
         }
         if let Some(text) = q.text.as_ref().map(|t| t.trim()).filter(|t| !t.is_empty()) {
             let p = arg(V::Text(format!("%{}%", like_escape(text))), &mut args);
@@ -578,6 +618,37 @@ impl Catalog {
 
     pub fn delete_saved_search(&self, id: i64) -> Result<()> {
         self.conn.execute("DELETE FROM saved_searches WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
+    // --------------------------------------------------------------- calendar
+
+    /// Photo counts per capture day (`YYYY-MM-DD`), oldest first, plus the
+    /// number of photos without a capture date.
+    pub fn calendar(&self) -> Result<Calendar> {
+        let mut st = self.conn.prepare(
+            "SELECT substr(taken_at, 1, 10) d, COUNT(*) FROM assets WHERE taken_at IS NOT NULL \
+             GROUP BY d ORDER BY d",
+        )?;
+        let days = st
+            .query_map([], |r| Ok(DayCount { day: r.get(0)?, count: r.get(1)? }))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let undated = self.conn.query_row("SELECT COUNT(*) FROM assets WHERE taken_at IS NULL", [], |r| r.get(0))?;
+        Ok(Calendar { days, undated })
+    }
+
+    /// Assets whose GPS has not been read yet (catalogs from before v2).
+    pub fn gps_pending(&self, limit: usize) -> Result<Vec<(i64, String)>> {
+        let mut st = self.conn.prepare("SELECT id, path FROM assets WHERE gps_scanned = 0 LIMIT ?1")?;
+        let rows = st.query_map([limit as i64], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub fn set_gps(&self, id: i64, gps: Option<[f64; 2]>) -> Result<()> {
+        self.conn.execute(
+            "UPDATE assets SET gps_lat = ?2, gps_lon = ?3, gps_scanned = 1 WHERE id = ?1",
+            params![id, gps.map(|g| g[0]), gps.map(|g| g[1])],
+        )?;
         Ok(())
     }
 
@@ -920,6 +991,21 @@ fn face_row(r: &Row<'_>) -> rusqlite::Result<FaceRow> {
     })
 }
 
+/// Brings catalogs created by older versions up to the current columns.
+fn migrate(conn: &Connection) -> Result<()> {
+    let has_gps: bool =
+        conn.query_row("SELECT COUNT(*) FROM pragma_table_info('assets') WHERE name = 'gps_lat'", [], |r| r.get(0))?;
+    if !has_gps {
+        conn.execute_batch(
+            "ALTER TABLE assets ADD COLUMN gps_lat REAL; \
+             ALTER TABLE assets ADD COLUMN gps_lon REAL; \
+             ALTER TABLE assets ADD COLUMN gps_scanned INTEGER NOT NULL DEFAULT 0;",
+        )?;
+    }
+    conn.execute_batch("CREATE INDEX IF NOT EXISTS assets_gps ON assets(gps_lat) WHERE gps_lat IS NOT NULL;")?;
+    Ok(())
+}
+
 fn folder_id_on(conn: &Connection, path: &str) -> Result<i64> {
     conn.execute("INSERT OR IGNORE INTO folders(path) VALUES (?1)", [path])?;
     Ok(conn.query_row("SELECT id FROM folders WHERE path = ?1", [path], |r| r.get(0))?)
@@ -935,12 +1021,19 @@ fn upsert_on(conn: &Connection, f: &ScannedFile) -> Result<Upsert> {
     let folder_id = folder_id_on(conn, &f.folder.to_string_lossy())?;
     let e = &f.exif;
     match existing {
-        Some((id, size, mtime)) if size == f.size && mtime == f.mtime => Ok(Upsert::Unchanged(id)),
+        Some((id, size, mtime)) if size == f.size && mtime == f.mtime => {
+            // Catalogs from before GPS was stored learn it on the next scan.
+            conn.prepare_cached(
+                "UPDATE assets SET gps_lat = ?2, gps_lon = ?3, gps_scanned = 1 WHERE id = ?1 AND gps_scanned = 0",
+            )?
+            .execute(params![id, e.gps.map(|g| g[0]), e.gps.map(|g| g[1])])?;
+            Ok(Upsert::Unchanged(id))
+        }
         Some((id, ..)) => {
             conn.execute(
                 "UPDATE assets SET folder_id=?2, size=?3, mtime=?4, width=?5, height=?6, taken_at=?7, \
                  camera_make=?8, camera_model=?9, lens=?10, iso=?11, f_number=?12, exposure_time=?13, \
-                 focal_length=?14, orientation=?15, phash=NULL WHERE id=?1",
+                 focal_length=?14, orientation=?15, phash=NULL, gps_lat=?16, gps_lon=?17, gps_scanned=1 WHERE id=?1",
                 params![
                     id,
                     folder_id,
@@ -956,7 +1049,9 @@ fn upsert_on(conn: &Connection, f: &ScannedFile) -> Result<Upsert> {
                     e.f_number,
                     e.exposure_time,
                     e.focal_length,
-                    e.orientation
+                    e.orientation,
+                    e.gps.map(|g| g[0]),
+                    e.gps.map(|g| g[1])
                 ],
             )?;
             Ok(Upsert::Updated(id))
@@ -964,8 +1059,9 @@ fn upsert_on(conn: &Connection, f: &ScannedFile) -> Result<Upsert> {
         None => {
             conn.execute(
                 "INSERT INTO assets(folder_id, path, file_name, ext, size, mtime, width, height, taken_at, \
-                 camera_make, camera_model, lens, iso, f_number, exposure_time, focal_length, orientation) \
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)",
+                 camera_make, camera_model, lens, iso, f_number, exposure_time, focal_length, orientation, \
+                 gps_lat, gps_lon, gps_scanned) \
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,1)",
                 params![
                     folder_id,
                     &*path,
@@ -983,7 +1079,9 @@ fn upsert_on(conn: &Connection, f: &ScannedFile) -> Result<Upsert> {
                     e.f_number,
                     e.exposure_time,
                     e.focal_length,
-                    e.orientation
+                    e.orientation,
+                    e.gps.map(|g| g[0]),
+                    e.gps.map(|g| g[1])
                 ],
             )?;
             Ok(Upsert::Inserted(conn.last_insert_rowid()))
@@ -995,6 +1093,7 @@ fn upsert_on(conn: &Connection, f: &ScannedFile) -> Result<Upsert> {
 mod tests {
     use super::*;
     use crate::metadata::ExifInfo;
+    use crate::search::SortKey;
     use std::path::PathBuf;
 
     fn scanned(path: &str, mtime: i64, taken: &str) -> ScannedFile {
@@ -1013,6 +1112,94 @@ mod tests {
             },
             path: p,
         }
+    }
+
+    fn in_folder(folder: &str, name: &str, taken: Option<&str>, gps: Option<[f64; 2]>) -> ScannedFile {
+        let sep = if folder.contains('\\') { '\\' } else { '/' };
+        ScannedFile {
+            folder: PathBuf::from(folder),
+            file_name: name.into(),
+            ext: "jpg".into(),
+            size: 100,
+            mtime: 1,
+            exif: ExifInfo { taken_at: taken.map(Into::into), gps, orientation: 1, ..Default::default() },
+            path: PathBuf::from(format!("{folder}{sep}{name}")),
+        }
+    }
+
+    #[test]
+    fn folder_tree_gps_and_calendar() {
+        let mut c = Catalog::open_in_memory().unwrap();
+        let files = [
+            in_folder("/p", "a.jpg", Some("2024-05-01 10:00:00"), Some([31.77, 35.21])),
+            in_folder("/p/sub", "b.jpg", Some("2024-05-01 18:00:00"), None),
+            in_folder("/p/sub/deep", "c.jpg", Some("2023-12-31 23:59:59"), None),
+            in_folder("/pp", "d.jpg", None, Some([32.08, 34.78])),
+            in_folder("/p_x", "e.jpg", None, None),
+            in_folder("C:\\Photos\\2024", "f.jpg", None, None),
+            in_folder("C:\\Photos", "g.jpg", None, None),
+        ];
+        c.upsert_many(&files).unwrap();
+        let count = |q: SearchQuery| c.search(&q).unwrap().len();
+        let tree = |p: &str| count(SearchQuery { folder_tree: Some(p.into()), ..Default::default() });
+        assert_eq!(tree("/p"), 3, "/pp and /p_x are not inside /p");
+        assert_eq!(tree("/p/"), 3);
+        assert_eq!(tree("/p/sub"), 2);
+        assert_eq!(tree("C:\\Photos"), 2);
+        assert_eq!(count(SearchQuery { has_gps: Some(true), ..Default::default() }), 2);
+        assert_eq!(count(SearchQuery { dated: Some(false), ..Default::default() }), 4);
+        let a = c.search(&SearchQuery { has_gps: Some(true), sort: SortKey::Name, ..Default::default() }).unwrap();
+        assert_eq!(a[0].gps, Some([31.77, 35.21]));
+
+        let cal = c.calendar().unwrap();
+        assert_eq!(cal.undated, 4);
+        assert_eq!(
+            cal.days,
+            vec![DayCount { day: "2023-12-31".into(), count: 1 }, DayCount { day: "2024-05-01".into(), count: 2 }]
+        );
+        // The UI filters a day with dateFrom = dateTo = day.
+        let day = SearchQuery {
+            date_from: Some("2024-05-01".into()),
+            date_to: Some("2024-05-01".into()),
+            ..Default::default()
+        };
+        assert_eq!(count(day), 2);
+    }
+
+    #[test]
+    fn v1_catalog_migrates_and_backfills_gps() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("cat.db");
+        {
+            // A v1 catalog: assets table without GPS columns.
+            let conn = Connection::open(&db).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE folders (id INTEGER PRIMARY KEY, path TEXT NOT NULL UNIQUE);
+                 CREATE TABLE assets (id INTEGER PRIMARY KEY, folder_id INTEGER NOT NULL, path TEXT NOT NULL UNIQUE,
+                   file_name TEXT NOT NULL, ext TEXT NOT NULL, size INTEGER NOT NULL, mtime INTEGER NOT NULL,
+                   width INTEGER, height INTEGER, taken_at TEXT, camera_make TEXT, camera_model TEXT, lens TEXT,
+                   iso INTEGER, f_number REAL, exposure_time REAL, focal_length REAL,
+                   orientation INTEGER NOT NULL DEFAULT 1, rating INTEGER NOT NULL DEFAULT 0,
+                   color_label INTEGER NOT NULL DEFAULT 0, tagged INTEGER NOT NULL DEFAULT 0, caption TEXT,
+                   phash INTEGER, develop TEXT);
+                 INSERT INTO folders VALUES (1, '/p');
+                 INSERT INTO assets(id, folder_id, path, file_name, ext, size, mtime, rating)
+                   VALUES (1, 1, '/p/a.jpg', 'a.jpg', 'jpg', 100, 1, 4);
+                 PRAGMA user_version = 1;",
+            )
+            .unwrap();
+        }
+        let mut c = Catalog::open(&db).unwrap();
+        let a = c.asset(1).unwrap();
+        assert_eq!((a.rating, a.gps), (4, None));
+        assert_eq!(c.gps_pending(10).unwrap(), vec![(1, "/p/a.jpg".to_string())]);
+        // An unchanged rescan fills GPS in…
+        c.upsert_many(&[in_folder("/p", "a.jpg", None, Some([1.5, 2.5]))]).unwrap();
+        assert_eq!(c.asset(1).unwrap().gps, Some([1.5, 2.5]));
+        assert!(c.gps_pending(10).unwrap().is_empty());
+        // …and so does the background backfill.
+        c.set_gps(1, None).unwrap();
+        assert_eq!(c.asset(1).unwrap().gps, None);
     }
 
     #[test]

@@ -5,8 +5,12 @@ import { api, urls } from "./api.js";
 import { store, emit, on, toast, promptText, el, fmt, LABELS } from "./state.js";
 import { openExportDialog } from "./export.js";
 import { aiAnalyzed, open as openAi } from "./ai.js";
+import { renderTree, folderTree, calendarTree } from "./tree.js";
+import * as map from "./map.js";
 
 let smartMode = false;
+let folderExpanded = null; // Set of expanded folder keys (roots open at first)
+const calendarExpanded = new Set();
 
 const $ = (id) => document.getElementById(id);
 const META_H = 34;
@@ -36,15 +40,32 @@ export async function reload({ keepFocus = true } = {}) {
   $("count").textContent = `${store.assets.length} photo${store.assets.length === 1 ? "" : "s"}`;
   for (const b of ["manage-export", "manage-preset", "manage-rename"]) $(b).disabled = store.assets.length === 0;
   $("breadcrumb").textContent = store.scope;
-  $("empty").hidden = store.assets.length > 0 || !!hasFilters();
+  $("empty").hidden = store.layout === "map" || store.assets.length > 0 || !!hasFilters();
   relayout(true);
   renderProps();
+  map.refresh();
   emit("assets-changed");
+}
+
+function setLayout(kind) {
+  const isMap = kind === "map";
+  store.layout = kind;
+  $("grid").hidden = isMap;
+  if (isMap) $("empty").hidden = true;
+  $("view-grid").setAttribute("aria-pressed", String(!isMap));
+  $("view-map").setAttribute("aria-pressed", String(isMap));
+  $("thumb-size").disabled = isMap;
+  map.show(isMap);
+  if (!isMap) {
+    $("empty").hidden = store.assets.length > 0 || !!hasFilters();
+    relayout(true);
+  }
 }
 
 function hasFilters() {
   const q = store.query;
-  return q.folder || q.text || q.minRating || q.colorLabel != null || q.tagged || q.keyword || q.collectionId || q.dateFrom || q.dateTo || q.camera || q.developed;
+  return q.folder || q.folderTree || q.text || q.minRating || q.colorLabel != null || q.tagged || q.keyword || q.collectionId
+    || q.personId != null || q.dateFrom || q.dateTo || q.dated != null || q.camera || q.developed;
 }
 
 function setScope(scope, patch) {
@@ -61,15 +82,17 @@ function patchQuery(patch) {
   Object.assign(store.query, patch);
   for (const k of Object.keys(store.query)) if (store.query[k] === undefined) delete store.query[k];
   syncFilterUi();
+  if ("calendarKey" in patch || "dated" in patch || "dateFrom" in patch || "dateTo" in patch) refreshSidebar();
   reload();
 }
 
 // ---------------------------------------------------------------- sidebar
 
 export async function refreshSidebar() {
-  const [folders, collections, keywords, saved, people] = await Promise.all([
+  const [folders, collections, keywords, saved, people, calendar] = await Promise.all([
     api.folders(), api.collections(), api.keywords(), api.savedSearches(), api.persons().catch(() => []),
-  ]).catch((e) => (toast(String(e), true), [[], [], [], [], []]));
+    api.calendar().catch(() => ({ days: [], undated: 0 })),
+  ]).catch((e) => (toast(String(e), true), [[], [], [], [], [], { days: [], undated: 0 }]));
 
   $("people-panel").hidden = people.length === 0;
   $("people-list").replaceChildren(...people.map((p) => {
@@ -104,13 +127,35 @@ export async function refreshSidebar() {
     }, el("span", {}, label), count != null ? el("span", { class: "count" }, String(count)) : null, extra);
 
   const total = folders.reduce((n, f) => n + f.count, 0);
-  $("folder-list").replaceChildren(
-    item("All photos", total, !q.folder && !q.collectionId && !q.keyword, () => setScope("All photos", {})),
-    ...folders.map((f) =>
-      item(shortPath(f.path), f.count, q.folder === f.path, () => setScope(f.path, { folder: f.path }),
-        el("button", { class: "icon-btn del", title: "Rescan", onclick: (e) => (e.stopPropagation(), api.rescanFolder(f.path)) }, "⟳"),
-        f.path)),
-  );
+  const allActive = !q.folder && !q.folderTree && !q.collectionId && !q.keyword && q.personId == null;
+  $("all-photos").replaceChildren(item("All photos", total, allActive, () => setScope("All photos", {})));
+  const roots = folderTree(folders);
+  if (!folderExpanded) folderExpanded = new Set(roots.map((r) => r.key));
+  const withRescan = (n) => ({
+    ...n,
+    extra: n.own > 0
+      ? el("button", { class: "icon-btn del", title: "Rescan this folder", "aria-label": `Rescan ${n.label}`, onclick: (e) => (e.stopPropagation(), api.rescanFolder(n.path)) }, "⟳")
+      : null,
+    children: n.children.map(withRescan),
+  });
+  renderTree($("folder-list"), roots.map(withRescan), {
+    expanded: folderExpanded,
+    activeKey: q.folderTree ?? q.folder,
+    onSelect: (n) => setScope(n.path, { folderTree: n.path }),
+  });
+
+  const days = calendarTree(calendar.days);
+  if (calendar.undated) days.push({ key: "undated", label: "No date", count: calendar.undated, children: [] });
+  $("calendar-panel").hidden = days.length === 0;
+  // `calendarKey` is UI-only (the backend ignores unknown query fields).
+  const calActive = q.dated === false ? "undated" : q.calendarKey;
+  renderTree($("calendar-list"), days, {
+    expanded: calendarExpanded,
+    activeKey: calActive,
+    onSelect: (n) => patchQuery(n.key === "undated"
+      ? { dated: false, dateFrom: undefined, dateTo: undefined, calendarKey: undefined }
+      : { dated: undefined, dateFrom: n.from, dateTo: n.to, calendarKey: n.key }),
+  });
   $("collection-list").replaceChildren(
     ...collections.map((c) => item(c.name, c.count, q.collectionId === c.id, () => setScope(`Collection · ${c.name}`, { collectionId: c.id }))),
   );
@@ -148,14 +193,17 @@ function buildFilters() {
   );
   $("tagged-filter").onchange = (e) => patchQuery({ tagged: e.target.checked || undefined });
   $("developed-filter").onchange = (e) => patchQuery({ developed: e.target.checked || undefined });
-  $("date-from").onchange = (e) => patchQuery({ dateFrom: e.target.value || undefined });
-  $("date-to").onchange = (e) => patchQuery({ dateTo: e.target.value || undefined });
+  $("date-from").onchange = (e) => patchQuery({ dateFrom: e.target.value || undefined, calendarKey: undefined, dated: undefined });
+  $("date-to").onchange = (e) => patchQuery({ dateTo: e.target.value || undefined, calendarKey: undefined, dated: undefined });
   $("camera-filter").oninput = (e) => {
     clearTimeout(e.target._t);
     e.target._t = setTimeout(() => patchQuery({ camera: e.target.value || undefined }), 250);
   };
   $("clear-filters").onclick = () =>
-    patchQuery({ minRating: undefined, colorLabel: undefined, tagged: undefined, developed: undefined, dateFrom: undefined, dateTo: undefined, camera: undefined });
+    patchQuery({
+      minRating: undefined, colorLabel: undefined, tagged: undefined, developed: undefined,
+      dateFrom: undefined, dateTo: undefined, dated: undefined, calendarKey: undefined, camera: undefined,
+    });
   $("save-search").onclick = async () => {
     const name = await promptText("Save current search as");
     if (!name) return;
@@ -487,6 +535,20 @@ export function init() {
   $("grid").addEventListener("click", onGridClick);
   $("grid").addEventListener("dblclick", (e) => e.target.closest(".cell") && emit("request-mode", "view"));
   new ResizeObserver(() => relayout()).observe($("grid"));
+  map.init();
+  $("view-grid").onclick = () => setLayout("grid");
+  $("view-map").onclick = () => setLayout("map");
+  on("map-select", (id) => {
+    store.focus = store.assets.findIndex((a) => a.id === id);
+    renderProps();
+    emit("focus-changed");
+  });
+  on("map-open", (id) => {
+    const i = store.assets.findIndex((a) => a.id === id);
+    if (i < 0) return;
+    setFocus(i);
+    emit("request-mode", "view");
+  });
 
   on("library-changed", () => {
     refreshSidebar();

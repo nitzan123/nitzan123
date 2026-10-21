@@ -449,6 +449,7 @@ mod tests {
             tagged: false,
             caption: None,
             developed: false,
+            gps: None,
         }
     }
 

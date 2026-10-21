@@ -18,6 +18,7 @@ pub fn run() {
             let data = app.path().app_data_dir()?;
             let cache = app.path().app_cache_dir()?;
             app.manage(AppState::open(&data, &cache)?);
+            indexer::spawn_gps_backfill(app.handle().clone());
             // `prism-studio <folder>…` indexes folders on start.
             for arg in std::env::args().skip(1) {
                 let p = std::path::PathBuf::from(arg);
@@ -32,6 +33,7 @@ pub fn run() {
             commands::add_folder,
             commands::rescan_folder,
             commands::folders,
+            commands::calendar,
             commands::presets,
             commands::save_preset,
             commands::delete_preset,

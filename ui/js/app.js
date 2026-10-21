@@ -50,6 +50,8 @@ function wireProgress() {
     }
     if (p.stage === "done") toast(`Indexed ${p.total} photos`);
   });
+  // Older catalogs learn photo locations in the background.
+  api.listen("gps-backfilled", () => emit("library-changed"));
   api.listen("index-error", (msg) => {
     box.hidden = true;
     toast(`Indexing failed: ${msg}`, true);

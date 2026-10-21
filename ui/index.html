@@ -32,7 +32,12 @@
       <aside class="sidebar left">
         <div class="panel">
           <h3>Folders</h3>
-          <ul id="folder-list" class="nav-list"></ul>
+          <ul id="all-photos" class="nav-list"></ul>
+          <ul id="folder-list" class="nav-list tree" aria-label="Folders"></ul>
+        </div>
+        <div class="panel" id="calendar-panel" hidden>
+          <h3>Calendar</h3>
+          <ul id="calendar-list" class="nav-list tree" aria-label="Calendar"></ul>
         </div>
         <div class="panel">
           <h3>Filter</h3>
@@ -72,6 +77,10 @@
         <div class="toolbar">
           <span id="breadcrumb" class="breadcrumb">All photos</span>
           <span class="spacer"></span>
+          <div class="seg" role="group" aria-label="Layout">
+            <button id="view-grid" class="btn small" aria-pressed="true" title="Thumbnail grid">Grid</button>
+            <button id="view-map" class="btn small" aria-pressed="false" title="Photos on a map (GPS)">Map</button>
+          </div>
           <label>Sort
             <select id="sort-key">
               <option value="name">Name</option>
@@ -89,6 +98,18 @@
           <button id="manage-export" class="btn small primary" title="Export selected photos">Export…</button>
         </div>
         <div id="grid" class="grid" tabindex="0" aria-label="Photos"><div id="grid-inner"></div></div>
+        <div id="map" class="map" tabindex="0" aria-label="Map of photo locations" hidden>
+          <div id="map-tiles" class="map-layer"></div>
+          <div id="map-markers" class="map-layer"></div>
+          <div class="map-controls">
+            <button id="map-zoom-in" class="btn small" title="Zoom in (+)" aria-label="Zoom in">＋</button>
+            <button id="map-zoom-out" class="btn small" title="Zoom out (−)" aria-label="Zoom out">−</button>
+            <button id="map-fit" class="btn small" title="Show all photos" aria-label="Show all photos">⤢</button>
+          </div>
+          <div id="map-popup" class="map-popup" hidden></div>
+          <div id="map-info" class="map-info"></div>
+          <div class="map-attribution">Map © <span>OpenStreetMap contributors</span> · tiles cached on this computer</div>
+        </div>
         <div id="empty" class="empty" hidden>
           <h2>No photos yet</h2>
           <p>Add a folder to start. Originals are never modified — ratings, keywords and edits go to the catalog and XMP sidecars.</p>

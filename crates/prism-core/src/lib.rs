@@ -17,6 +17,7 @@ pub mod scan;
 pub mod search;
 pub mod similarity;
 pub mod thumbs;
+pub mod tiles;
 pub mod workflow;
 pub mod xmp;
 

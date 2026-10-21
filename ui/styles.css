@@ -260,3 +260,38 @@ label.block { display: flex; flex-direction: column; gap: 4px; margin: 8px 0; }
 .preset-grid .preset button.del { position: absolute; right: 2px; top: 50%; transform: translateY(-50%); padding: 0 6px; background: none; border: 0; color: var(--muted, #888); cursor: pointer; }
 .preset-grid .preset button.del:hover { color: var(--danger, #e5534b); }
 #preset-select { width: 100%; margin: 8px 0; }
+
+/* -------------------------------------------------------------- trees */
+.nav-list.tree li { justify-content: flex-start; align-items: center; gap: 2px; }
+.nav-list.tree .tree-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nav-list.tree .twisty { width: 16px; flex: none; background: none; border: 0; color: var(--muted); cursor: pointer; padding: 0; font-size: 10px; text-align: center; }
+.nav-list.tree li:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+
+/* ---------------------------------------------------------------- map */
+.seg { display: inline-flex; }
+.seg .btn { border-radius: 0; }
+.seg .btn:first-child { border-radius: var(--radius) 0 0 var(--radius); }
+.seg .btn:last-child { border-radius: 0 var(--radius) var(--radius) 0; margin-left: -1px; }
+.seg .btn[aria-pressed="true"] { background: var(--sel); border-color: var(--accent); }
+.map { position: relative; flex: 1; overflow: hidden; background: #aad3df; cursor: grab; touch-action: none; outline: none;
+  background-image: linear-gradient(rgba(0,0,0,.06) 1px, transparent 1px), linear-gradient(90deg, rgba(0,0,0,.06) 1px, transparent 1px);
+  background-size: 64px 64px; }
+.map:active { cursor: grabbing; }
+.map:focus-visible { box-shadow: inset 0 0 0 2px var(--accent); }
+.map-layer { position: absolute; inset: 0; }
+.map .tile { position: absolute; left: 0; top: 0; width: 256px; height: 256px; user-select: none; pointer-events: none; }
+.map .marker { position: absolute; left: 0; top: 0; width: 44px; height: 44px; border-radius: 50%; border: 3px solid #fff;
+  background: var(--bg-3) center / cover no-repeat; box-shadow: 0 2px 6px rgba(0,0,0,.45); cursor: pointer; padding: 0; }
+.map .marker.selected { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent), 0 2px 6px rgba(0,0,0,.45); }
+.map .marker .badge { position: absolute; right: -8px; top: -8px; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 10px;
+  background: var(--accent); color: #fff; font-size: 11px; line-height: 20px; font-weight: 600; }
+.map-controls { position: absolute; right: 10px; top: 10px; display: flex; flex-direction: column; gap: 4px; }
+.map-controls .btn { width: 30px; height: 30px; padding: 0; font-size: 16px; }
+.map-info { position: absolute; left: 10px; top: 10px; background: rgba(23,24,27,.85); color: var(--text); padding: 4px 10px; border-radius: var(--radius); font-size: 12px; pointer-events: none; }
+.map-attribution { position: absolute; right: 0; bottom: 0; background: rgba(255,255,255,.8); color: #333; font-size: 11px; padding: 1px 6px; pointer-events: none; }
+.map-popup { position: absolute; width: 280px; background: var(--bg-2); border: 1px solid var(--line); border-radius: var(--radius); padding: 8px; box-shadow: 0 6px 20px rgba(0,0,0,.5); cursor: default; z-index: 2; }
+.map-popup-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 12px; }
+.map-popup-head span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.map-popup-thumbs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; margin-bottom: 6px; }
+.map-popup-thumbs img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 3px; cursor: pointer; }
+.map-popup-thumbs img:hover, .map-popup-thumbs img:focus { outline: 2px solid var(--accent); }

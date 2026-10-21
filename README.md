@@ -18,6 +18,17 @@ for what was studied and where the clean-room boundary sits.
 ## Features
 
 **Manage**
+- **Folder tree**: nested folders with photo counts; selecting a folder
+  shows it with everything below it.
+- **Calendar**: browse by year › month › day of capture (plus "No date").
+- **Map**: photos with GPS on an OpenStreetMap map, clustered, honouring the
+  current folder and filters. Click a cluster to select its photos, open one,
+  or zoom in. Map tiles are downloaded from openstreetmap.org by the app
+  (identifying itself, as OSM's tile policy asks) and cached on disk for 30
+  days, so areas you've seen work offline. Only tile coordinates are sent,
+  never photos or their exact positions.
+
+  ![Map filtered by the calendar](docs/screenshots/map-calendar.jpg)
 - Add folders (recursive). A background indexer reads EXIF and builds
   thumbnails (RAW files use their embedded preview), then computes
   perceptual hashes.
@@ -130,7 +141,7 @@ Requirements: Rust (stable) and the
 ```bash
 cargo run -p prism-studio --release                # start the app
 cargo run -p prism-studio --release -- ~/Pictures  # start and index a folder
-cargo test --workspace                             # 80 tests (unit + robustness)
+cargo test --workspace                             # 83 tests (unit + robustness)
 ```
 
 To build installers (`.msi`/`.exe`, `.dmg`, `.deb`/`.AppImage`):
@@ -149,7 +160,7 @@ cargo run --release --example develop_cli -- out/ photo1.NEF photo2.CR2
 
 ## Quality
 
-- **80 automated tests**, including an end-to-end robustness suite. It uses a
+- **83 automated tests**, including an end-to-end robustness suite. It uses a
   generated library of awkward files: Hebrew folder and file names, spaces,
   EXIF-rotated portraits, 16-bit TIFF, alpha PNG, 1×1 images, empty, truncated
   and fake files. It checks that everything indexes, thumbnails, decodes and
@@ -170,9 +181,10 @@ cargo run --release --example develop_cli -- out/ photo1.NEF photo2.CR2
 
 ```
 crates/prism-core   UI-agnostic engine (all logic, all tests)
-  catalog.rs        SQLite catalog: assets, folders, keywords, collections, saved searches, develop JSON
+  catalog.rs        SQLite catalog: assets (incl. GPS), folders, keywords, collections, presets, saved searches, develop JSON; migrations
   scan.rs           folder walk + EXIF incl. GPS (parallel, tolerant of malformed EXIF)
   geocode.rs        GPS → "City, Country" via OpenStreetMap (rate-limited, cached)
+  tiles.rs          OpenStreetMap map tiles with an on-disk cache and offline fallback
   overlay.rs        caption text rendering (bundled DejaVu Sans Bold, bidi-aware)
   imaging.rs        single entry point for decoding (display path / linear path)
   raw.rs            embedded-preview extraction, RAW decode → linear sRGB, base curve

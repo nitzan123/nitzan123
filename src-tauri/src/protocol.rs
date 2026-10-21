@@ -1,5 +1,7 @@
 //! `prism://localhost/thumb/<id>` — cached thumbnail (JPEG)
 //! `prism://localhost/view/<id>?max=<px>` — developed full view (JPEG)
+//! `prism://localhost/face/<id>` — face crop (JPEG)
+//! `prism://localhost/tile/<z>/<x>/<y>` — OpenStreetMap tile (PNG, cached)
 //!
 //! Served off the UI thread; responses are cacheable by the webview because
 //! the UI appends a version query when an asset changes.
@@ -15,15 +17,26 @@ use tauri::{Manager, Runtime, UriSchemeContext, UriSchemeResponder};
 
 pub fn handle<R: Runtime>(ctx: UriSchemeContext<'_, R>, req: Request<Vec<u8>>, responder: UriSchemeResponder) {
     let app = ctx.app_handle().clone();
-    // Bounded pool: scrolling a big uncached grid fires hundreds of requests;
-    // unbounded threads would each decode a full image at once.
-    pool().spawn(move || {
-        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| serve(&app.state::<AppState>(), req.uri())))
-            .unwrap_or_else(|_| Err("internal error while rendering".into()));
+    let is_tile = req.uri().path().starts_with("/tile/");
+    // Bounded pools: scrolling a big uncached grid fires hundreds of
+    // requests; unbounded threads would each decode a full image at once.
+    // Tiles get their own two threads (network-bound; OSM asks clients to
+    // keep concurrent downloads low) so the map never starves thumbnails.
+    let pool = if is_tile { tile_pool() } else { pool() };
+    pool.spawn(move || {
+        let state = app.state::<AppState>();
+        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if is_tile {
+                tile(&state, req.uri().path())
+            } else {
+                serve(&state, req.uri())
+            }
+        }))
+        .unwrap_or_else(|_| Err("internal error while rendering".into()));
         responder.respond(match res {
             Ok(bytes) => Response::builder()
-                .header("Content-Type", "image/jpeg")
-                .header("Cache-Control", "max-age=31536000")
+                .header("Content-Type", if is_tile { "image/png" } else { "image/jpeg" })
+                .header("Cache-Control", if is_tile { "max-age=86400" } else { "max-age=31536000" })
                 .header("Access-Control-Allow-Origin", "*")
                 .body(bytes)
                 .unwrap(),
@@ -42,6 +55,23 @@ fn pool() -> &'static rayon::ThreadPool {
             .build()
             .expect("image thread pool")
     })
+}
+
+fn tile_pool() -> &'static rayon::ThreadPool {
+    static POOL: std::sync::OnceLock<rayon::ThreadPool> = std::sync::OnceLock::new();
+    POOL.get_or_init(|| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(2)
+            .thread_name(|i| format!("prism-tile-{i}"))
+            .build()
+            .expect("tile thread pool")
+    })
+}
+
+fn tile(state: &AppState, path: &str) -> Result<Vec<u8>, String> {
+    let n: Vec<u32> = path.trim_start_matches("/tile/").split('/').filter_map(|p| p.parse().ok()).collect();
+    let [z, x, y] = n[..] else { return Err("bad tile".into()) };
+    state.tiles.get(z, x, y).map_err(|e| e.to_string())
 }
 
 fn serve(state: &AppState, uri: &tauri::http::Uri) -> Result<Vec<u8>, String> {

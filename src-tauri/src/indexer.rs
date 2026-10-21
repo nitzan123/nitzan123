@@ -104,3 +104,32 @@ fn run(app: &AppHandle, root: &std::path::Path, recursive: bool) -> prism_core::
     emit("done", total, total);
     Ok(())
 }
+
+/// Reads GPS for catalog entries created before positions were stored, in
+/// the background, then tells the UI so the map can refresh.
+pub fn spawn_gps_backfill(app: AppHandle) {
+    std::thread::spawn(move || {
+        let state = app.state::<AppState>();
+        let mut found = 0usize;
+        loop {
+            let Ok(batch) = state.catalog().gps_pending(256) else { return };
+            if batch.is_empty() {
+                break;
+            }
+            let read: Vec<(i64, Option<[f64; 2]>)> = batch
+                .par_iter()
+                .map(|(id, p)| (*id, prism_core::metadata::read_exif(std::path::Path::new(p)).gps))
+                .collect();
+            let cat = state.catalog();
+            for (id, gps) in read {
+                found += gps.is_some() as usize;
+                if cat.set_gps(id, gps).is_err() {
+                    return;
+                }
+            }
+        }
+        if found > 0 {
+            let _ = app.emit("gps-backfilled", found);
+        }
+    });
+}

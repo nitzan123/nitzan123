@@ -11,6 +11,8 @@ export const store = {
   query: { sort: "name", descending: false },
   /** Human description of the current source (folder, collection…). */
   scope: "All photos",
+  /** Manage layout: "grid" or "map". */
+  layout: "grid",
   /** Active smart (CLIP) search text, or null. */
   smart: null,
   assets: [],

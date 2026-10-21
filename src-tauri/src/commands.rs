@@ -75,6 +75,11 @@ pub fn folders(state: State<'_, AppState>) -> CmdResult<Vec<FolderInfo>> {
 }
 
 #[tauri::command]
+pub fn calendar(state: State<'_, AppState>) -> CmdResult<prism_core::catalog::Calendar> {
+    state.catalog().calendar().map_err(s)
+}
+
+#[tauri::command]
 pub fn search(state: State<'_, AppState>, query: SearchQuery) -> CmdResult<Vec<Asset>> {
     state.catalog().search(&query).map_err(s)
 }
