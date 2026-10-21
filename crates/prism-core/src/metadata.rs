@@ -4,7 +4,7 @@
 use exif::{In, Reader, Tag, Value};
 use serde::{Deserialize, Serialize};
 use std::fs::File;
-use std::io::BufReader;
+use std::io::{BufReader, Read};
 use std::path::Path;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -28,15 +28,8 @@ pub struct ExifInfo {
 }
 
 pub fn read_exif(path: &Path) -> ExifInfo {
-    let Ok(file) = File::open(path) else {
+    let Some(exif) = parse(path) else {
         return ExifInfo { orientation: 1, ..Default::default() };
-    };
-    // Tolerant parsing: files from some phones/editors carry a malformed
-    // IFD link; keep every field that did parse instead of losing them all.
-    let exif = match Reader::new().continue_on_error(true).read_from_container(&mut BufReader::new(file)) {
-        Ok(e) => e,
-        Err(exif::Error::PartialResult(partial)) => partial.into_inner().0,
-        Err(_) => return ExifInfo { orientation: 1, ..Default::default() },
     };
 
     let text = |tag: Tag| -> Option<String> {
@@ -73,6 +66,54 @@ pub fn read_exif(path: &Path) -> ExifInfo {
         orientation: uint(Tag::Orientation).map(|o| o as u16).filter(|o| (1..=8).contains(o)).unwrap_or(1),
         gps: gps(&exif),
     }
+}
+
+/// Tolerant parsing: files from some phones/editors carry a malformed IFD
+/// link, so every field that did parse is kept instead of losing them all.
+fn tolerant(r: std::result::Result<exif::Exif, exif::Error>) -> Option<exif::Exif> {
+    match r {
+        Ok(e) => Some(e),
+        Err(exif::Error::PartialResult(partial)) => Some(partial.into_inner().0),
+        Err(_) => None,
+    }
+}
+
+fn parse(path: &Path) -> Option<exif::Exif> {
+    let file = File::open(path).ok()?;
+    if let Some(e) = tolerant(Reader::new().continue_on_error(true).read_from_container(&mut BufReader::new(file))) {
+        return Some(e);
+    }
+    // RAW containers the parser doesn't recognise: Olympus ORF ("IIRO"),
+    // Panasonic RW2 ("IIU\0"), Fuji RAF, Canon CR3 (ISO-BMFF with a TIFF
+    // inside its CMT box). Look for a TIFF header near the start, then for an
+    // embedded JPEG carrying EXIF.
+    if !crate::raw::is_raw_ext(&crate::imaging::ext_of(path)) {
+        return None;
+    }
+    let mut head = Vec::new();
+    File::open(path).ok()?.take(8 << 20).read_to_end(&mut head).ok()?;
+    if head.len() > 8 && &head[..2] == b"II" && matches!(&head[2..4], b"RO" | b"RS" | b"U\0") {
+        let mut tiff = head.clone();
+        tiff[2..4].copy_from_slice(&[0x2A, 0x00]);
+        if let Some(e) = tolerant(Reader::new().continue_on_error(true).read_raw(tiff)) {
+            return Some(e);
+        }
+    }
+    let limit = head.len().min(1 << 20);
+    for i in 0..limit.saturating_sub(8) {
+        let w = &head[i..i + 4];
+        if w == b"II*\0" || w == b"MM\0*" {
+            if let Some(e) = tolerant(Reader::new().continue_on_error(true).read_raw(head[i..].to_vec())) {
+                if e.get_field(Tag::Model, In::PRIMARY).is_some()
+                    || e.get_field(Tag::DateTimeOriginal, In::PRIMARY).is_some()
+                {
+                    return Some(e);
+                }
+            }
+        }
+    }
+    let jpeg = crate::raw::extract_embedded_jpeg(&head)?;
+    tolerant(Reader::new().continue_on_error(true).read_from_container(&mut std::io::Cursor::new(jpeg)))
 }
 
 fn gps(exif: &exif::Exif) -> Option<[f64; 2]> {
@@ -144,6 +185,29 @@ mod tests {
         assert_eq!(e.camera_model.as_deref(), Some("iPhone 15"));
         let [lat, lon] = e.gps.expect("gps");
         assert!((lat - 31.7767).abs() < 1e-4 && (lon + 35.2345).abs() < 1e-4, "{lat},{lon}");
+    }
+
+    #[test]
+    fn reads_exif_from_orf_style_tiff_variant() {
+        // An Olympus ORF is a little-endian TIFF whose magic is "IIRO"
+        // instead of "II*\0". One IFD entry: Model (0x0110), ASCII "E-M1\0".
+        let mut orf = b"IIRO".to_vec();
+        orf.extend_from_slice(&8u32.to_le_bytes());
+        orf.extend_from_slice(&1u16.to_le_bytes());
+        orf.extend_from_slice(&0x0110u16.to_le_bytes());
+        orf.extend_from_slice(&2u16.to_le_bytes()); // ASCII
+        orf.extend_from_slice(&5u32.to_le_bytes());
+        orf.extend_from_slice(&26u32.to_le_bytes()); // value offset
+        orf.extend_from_slice(&0u32.to_le_bytes()); // next IFD
+        orf.extend_from_slice(b"E-M1\0");
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("x.ORF");
+        std::fs::write(&p, &orf).unwrap();
+        assert_eq!(read_exif(&p).camera_model.as_deref(), Some("E-M1"));
+        // The same bytes under a non-RAW extension are not second-guessed.
+        let q = dir.path().join("x.jpg");
+        std::fs::write(&q, &orf).unwrap();
+        assert!(read_exif(&q).camera_model.is_none());
     }
 
     #[test]

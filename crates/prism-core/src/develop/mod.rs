@@ -204,7 +204,7 @@ impl CropRect {
     pub fn clamped(self) -> Self {
         let x = self.x.clamp(0.0, 0.99);
         let y = self.y.clamp(0.0, 0.99);
-        Self { x, y, w: self.w.clamp(0.01, 1.0 - x), h: self.h.clamp(0.01, 1.0 - y) }
+        Self { x, y, w: self.w.clamp(0.01, (1.0 - x).max(0.01)), h: self.h.clamp(0.01, (1.0 - y).max(0.01)) }
     }
 }
 

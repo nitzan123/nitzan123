@@ -10,6 +10,10 @@ license = "MIT"
 [profile.dev.package."*"]
 opt-level = 2
 
+# Image processing is unusably slow unoptimised; keep debug builds snappy.
+[profile.dev.package.prism-core]
+opt-level = 2
+
 [profile.release]
 lto = "thin"
 codegen-units = 4

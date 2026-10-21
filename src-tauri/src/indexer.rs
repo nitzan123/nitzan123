@@ -39,30 +39,36 @@ fn run(app: &AppHandle, root: &std::path::Path, recursive: bool) -> prism_core::
     let scanned = scan::scan_files(&paths);
     let results = state.catalog().upsert_many(&scanned)?;
 
-    // Import ratings/keywords/develop from sidecars of new files.
+    // Import ratings/keywords/develop from sidecars of new files. Disk work
+    // (reading sidecars, checking for deleted files) happens before taking
+    // the catalog lock so the UI stays responsive on slow/network drives.
+    let sidecars: Vec<(i64, xmp::Sidecar)> = scanned
+        .iter()
+        .zip(&results)
+        .filter_map(|(file, res)| match res {
+            Upsert::Inserted(id) => xmp::read_sidecar(&file.path).map(|sc| (*id, sc)),
+            _ => None,
+        })
+        .collect();
+    let known = state.catalog().assets_under(&folder, recursive)?;
+    let gone: Vec<i64> =
+        known.into_iter().filter(|(_, p)| !std::path::Path::new(p).exists()).map(|(id, _)| id).collect();
     {
         let cat = state.catalog();
-        for (file, res) in scanned.iter().zip(&results) {
-            if let Upsert::Inserted(id) = res {
-                if let Some(sc) = xmp::read_sidecar(&file.path) {
-                    cat.set_rating(&[*id], sc.rating)?;
-                    cat.set_color_label(&[*id], sc.color_label)?;
-                    cat.set_tagged(&[*id], sc.tagged)?;
-                    if let Some(c) = &sc.caption {
-                        cat.set_caption(*id, c)?;
-                    }
-                    for k in &sc.keywords {
-                        cat.add_keyword(&[*id], k)?;
-                    }
-                    cat.set_develop(*id, sc.develop.as_ref())?;
-                }
+        for &(id, ref sc) in &sidecars {
+            cat.set_rating(&[id], sc.rating)?;
+            cat.set_color_label(&[id], sc.color_label)?;
+            cat.set_tagged(&[id], sc.tagged)?;
+            if let Some(c) = &sc.caption {
+                cat.set_caption(id, c)?;
             }
+            for k in &sc.keywords {
+                cat.add_keyword(&[id], k)?;
+            }
+            cat.set_develop(id, sc.develop.as_ref())?;
         }
-        for dir in
-            scanned.iter().map(|f| f.folder.to_string_lossy().to_string()).collect::<std::collections::BTreeSet<_>>()
-        {
-            cat.prune_missing(&dir)?;
-        }
+        // Files and whole sub-folders deleted from disk since the last scan.
+        cat.delete_assets(&gone)?;
     }
     emit("indexed", scanned.len(), scanned.len());
 

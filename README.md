@@ -30,6 +30,8 @@ for what was studied and where the clean-room boundary sits.
 - **Find similar**: near-duplicate detection with a 64-bit dHash.
 - Sorting by name, capture date, rating, size or modified date.
 
+Press `?` anywhere for the keyboard shortcut list.
+
 **View**: full-screen viewer with filmstrip, wheel or arrow-key navigation,
 and 1:1 zoom with panning (`Z` or click).
 
@@ -77,7 +79,7 @@ available from both Manage (batch export of the selection) and Develop.
 |---|---|
 | Raster | JPEG, PNG, TIFF, WebP, GIF, BMP |
 | RAW | CR2, NEF, ARW, DNG, ORF, RW2, RAF, PEF, SRW and [many more](crates/prism-core/src/raw.rs) via rawloader. CR3 has a thumbnail preview only. |
-| Sidecar | `photo.ext.xmp`, which holds `xmp:Rating`, `xmp:Label`, `dc:subject` and `dc:description`. Lightroom, darktable and digiKam can read these. Develop settings are stored in the `prism:` namespace. |
+| Sidecar | `photo.ext.xmp`, which holds `xmp:Rating`, `xmp:Label`, `dc:subject` and `dc:description`. Lightroom, darktable and digiKam can read these. Develop settings are stored in the `prism:` namespace. If `photo.ext.xmp` was written by another program (for example darktable's edit history), Prism never overwrites it: it reads the rating and keywords from it and writes its own data to `photo.ext.prism.xmp` instead. |
 
 ## Build and run
 
@@ -88,7 +90,7 @@ Requirements: Rust (stable) and the
 ```bash
 cargo run -p prism-studio --release                # start the app
 cargo run -p prism-studio --release -- ~/Pictures  # start and index a folder
-cargo test --workspace                             # 49 unit tests
+cargo test --workspace                             # 54 tests (unit + robustness)
 ```
 
 To build installers (`.msi`/`.exe`, `.dmg`, `.deb`/`.AppImage`):
@@ -104,6 +106,25 @@ pipeline output:
 ```bash
 cargo run --release --example develop_cli -- out/ photo1.NEF photo2.CR2
 ```
+
+## Quality
+
+- **54 automated tests**, including an end-to-end robustness suite. It uses a
+  generated library of awkward files: Hebrew folder and file names, spaces,
+  EXIF-rotated portraits, 16-bit TIFF, alpha PNG, 1×1 images, empty, truncated
+  and fake files. It checks that everything indexes, thumbnails, decodes and
+  renders, and that broken files fail on their own without stopping the batch.
+- CI on every push (`.github/workflows/ci.yml`): rustfmt, clippy with
+  `-D warnings`, the tests, and a UI syntax check.
+- Performance on 4 CPU cores with 1,000 photos at 6 MP:
+
+  | Step | Time |
+  |---|---|
+  | Metadata scan | 29 ms |
+  | Thumbnails | 11 s |
+  | Search | 2 ms |
+  | Rescan when nothing changed | 37 ms |
+  | Rating 1,000 selected photos | instant (no per-photo round trip) |
 
 ## Architecture
 
@@ -131,8 +152,9 @@ noise reduction and sharpening.
 
 ## Known limitations (v0.1)
 
-- RAW demosaic uses 2×2 superpixel binning, so RAW output is half the sensor
-  resolution. Full-resolution demosaic (AMaZE/RCD-class) is the top roadmap
+- RAW demosaic uses superpixel binning (2×2 Bayer, 3×3 Fuji X-Trans), so RAW
+  output is half (X-Trans: one third) of the sensor resolution. RAWs the
+  decoder can't read (e.g. CR3) are developed from their embedded JPEG. Full-resolution demosaic (AMaZE/RCD-class) is the top roadmap
   item.
 - No lens-profile correction or chromatic-aberration removal yet.
 - The sky mask is a heuristic (colour, brightness and connection to the top

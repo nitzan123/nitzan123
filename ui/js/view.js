@@ -31,17 +31,24 @@ function show() {
   if (!a) return;
   const img = $("view-img");
   zoomed = false;
+  img.onload = null; // a pending zoom-load must not re-zoom the next photo
   img.classList.remove("zoomed");
   img.style.cssText = "";
   const max = Math.round(Math.max(window.innerWidth, window.innerHeight) * devicePixelRatio);
   img.src = urls.view(a, Math.min(max, 4096));
+  updateInfo();
+  renderFilmstrip($("view-strip"));
+}
+
+function updateInfo() {
+  const a = store.current;
+  if (!a) return;
   $("view-info").textContent = [
     `${store.focus + 1} / ${store.assets.length}`,
     a.fileName,
     a.rating ? fmt.stars(a.rating) : null,
     a.takenAt,
   ].filter(Boolean).join("   ·   ");
-  renderFilmstrip($("view-strip"));
 }
 
 function toggleZoom(e) {
@@ -92,7 +99,8 @@ export function init() {
 
   on("mode", ({ mode }) => mode === "view" && show());
   on("focus-changed", () => store.mode === "view" && show());
-  on("assets-updated", () => store.mode === "view" && show());
+  // Rating/label changes only touch the info line; keep zoom and pan.
+  on("assets-updated", () => store.mode === "view" && updateInfo());
   on("key", (e) => {
     if (store.mode !== "view") return;
     if (e.key === "ArrowRight" || e.key === "PageDown") go(store.focus + 1);

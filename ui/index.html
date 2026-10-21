@@ -17,6 +17,7 @@
       <button role="tab" data-mode="edit">Edit</button>
     </nav>
     <div class="topbar-right">
+      <button id="help-btn" class="icon-btn" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">?</button>
       <input id="quick-search" type="search" placeholder="Search name, caption, keyword…" aria-label="Quick search" />
       <button id="add-folder" class="btn primary">Add folder</button>
       <div id="progress" class="progress" hidden><div class="progress-bar"></div><span class="progress-text"></span></div>
@@ -38,8 +39,8 @@
           <label class="check"><input type="checkbox" id="tagged-filter" /> Tagged only</label>
           <label class="check"><input type="checkbox" id="developed-filter" /> Developed only</label>
           <div class="date-row">
-            <input type="date" id="date-from" aria-label="Taken from" />
-            <input type="date" id="date-to" aria-label="Taken to" />
+            <label>Taken from<input type="date" id="date-from" /></label>
+            <label>to<input type="date" id="date-to" /></label>
           </div>
           <input type="text" id="camera-filter" placeholder="Camera" aria-label="Camera" />
           <div class="row gap">
@@ -136,7 +137,7 @@
     <form method="dialog">
       <label id="prompt-label"></label>
       <input id="prompt-input" type="text" />
-      <menu><button value="cancel" class="btn">Cancel</button><button value="ok" class="btn primary">OK</button></menu>
+      <menu><button value="ok" class="btn primary">OK</button><button value="cancel" class="btn">Cancel</button></menu>
     </form>
   </dialog>
   <dialog id="export-dialog">
@@ -179,7 +180,27 @@
         <p id="cap-note" class="hint"></p>
       </div>
       <p class="muted" id="exp-count"></p>
-      <menu><button value="cancel" class="btn">Cancel</button><button value="ok" class="btn primary">Choose folder & export</button></menu>
+      <menu><button value="ok" class="btn primary">Choose folder & export</button><button value="cancel" class="btn">Cancel</button></menu>
+    </form>
+  </dialog>
+  <dialog id="help-dialog" aria-labelledby="help-title">
+    <form method="dialog">
+      <h3 id="help-title">Keyboard shortcuts</h3>
+      <dl class="shortcuts">
+        <dt>0 – 5</dt><dd>Rating</dd>
+        <dt>6 7 8 9</dt><dd>Label red / yellow / green / blue</dd>
+        <dt>T</dt><dd>Toggle tagged</dd>
+        <dt>Enter / Space</dt><dd>View photo</dd>
+        <dt>G · D · E</dt><dd>Manage · Develop · Edit</dd>
+        <dt>Esc</dt><dd>Back to Manage</dd>
+        <dt>← → ↑ ↓</dt><dd>Move between photos (Shift extends selection)</dd>
+        <dt>Ctrl+A</dt><dd>Select all</dd>
+        <dt>Z / click</dt><dd>Zoom 1:1 in View</dd>
+        <dt>\</dt><dd>Before / after in Develop</dd>
+        <dt>Ctrl+Z · Ctrl+Shift+Z</dt><dd>Undo · redo develop edits</dd>
+        <dt>Double-click a slider label</dt><dd>Reset that slider</dd>
+      </dl>
+      <menu><button value="ok" class="btn primary">Close</button></menu>
     </form>
   </dialog>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>

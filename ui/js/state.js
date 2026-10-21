@@ -51,6 +51,7 @@ export function promptText(label, value = "") {
   document.getElementById("prompt-label").textContent = label;
   const input = document.getElementById("prompt-input");
   input.value = value;
+  dlg.returnValue = ""; // Esc must not reuse the previous dialog's "ok"
   dlg.showModal();
   input.select();
   return new Promise((resolve) => {

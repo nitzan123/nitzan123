@@ -15,8 +15,11 @@ use tauri::{Manager, Runtime, UriSchemeContext, UriSchemeResponder};
 
 pub fn handle<R: Runtime>(ctx: UriSchemeContext<'_, R>, req: Request<Vec<u8>>, responder: UriSchemeResponder) {
     let app = ctx.app_handle().clone();
-    std::thread::spawn(move || {
-        let res = serve(&app.state::<AppState>(), req.uri());
+    // Bounded pool: scrolling a big uncached grid fires hundreds of requests;
+    // unbounded threads would each decode a full image at once.
+    pool().spawn(move || {
+        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| serve(&app.state::<AppState>(), req.uri())))
+            .unwrap_or_else(|_| Err("internal error while rendering".into()));
         responder.respond(match res {
             Ok(bytes) => Response::builder()
                 .header("Content-Type", "image/jpeg")
@@ -27,6 +30,18 @@ pub fn handle<R: Runtime>(ctx: UriSchemeContext<'_, R>, req: Request<Vec<u8>>, r
             Err(msg) => Response::builder().status(404).body(msg.into_bytes()).unwrap(),
         });
     });
+}
+
+fn pool() -> &'static rayon::ThreadPool {
+    static POOL: std::sync::OnceLock<rayon::ThreadPool> = std::sync::OnceLock::new();
+    POOL.get_or_init(|| {
+        let n = std::thread::available_parallelism().map_or(2, |n| n.get().clamp(2, 6));
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(n)
+            .thread_name(|i| format!("prism-img-{i}"))
+            .build()
+            .expect("image thread pool")
+    })
 }
 
 fn serve(state: &AppState, uri: &tauri::http::Uri) -> Result<Vec<u8>, String> {

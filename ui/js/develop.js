@@ -137,20 +137,30 @@ export async function flushSave() {
   }
 }
 
+let loadSeq = 0;
+
+/** Loads `asset` into the workspace. Overlapping calls (holding →) are
+ * resolved by sequence number so the newest request always wins and the
+ * settings shown always belong to `dev.id`. */
 async function load(asset) {
+  const seq = ++loadSeq;
   await flushSave();
+  if (seq !== loadSeq) return;
+  let settings;
+  try {
+    settings = Object.assign(defaults(), await api.developGet(asset.id));
+  } catch (e) {
+    toast(String(e), true);
+    settings = defaults();
+  }
+  if (seq !== loadSeq) return;
   dev.id = asset.id;
+  dev.s = settings;
   dev.fullAspect = null;
   dev.before = false;
   $("dev-before").classList.remove("active");
   $("dev-name").textContent = asset.fileName;
   $("dev-status").textContent = "";
-  try {
-    dev.s = Object.assign(defaults(), await api.developGet(asset.id));
-  } catch (e) {
-    toast(String(e), true);
-    dev.s = defaults();
-  }
   dev.committed = JSON.stringify(dev.s);
   dev.undo = [];
   dev.redo = [];
@@ -182,7 +192,7 @@ export async function preview() {
       img.src = p.dataUrl;
       await img.decode().catch(() => {});
       dev.lastPreview = p;
-      if (!settings.geometry.crop) dev.fullAspect = p.width / p.height;
+      if (!dev.before && !settings.geometry.crop) dev.fullAspect = p.width / p.height;
       drawHistogram($("histogram"), p.histogram);
       curve?.setHistogram(p.histogram);
       edit.drawOverlay(ctx);
@@ -326,12 +336,18 @@ function copySettings() {
 async function pasteSettings() {
   if (!clipboard) return toast("Nothing copied yet");
   const ids = store.selectedIds();
+  const failed = [];
   for (const id of ids) {
     if (id === dev.id) continue;
-    const cur = Object.assign(defaults(), await api.developGet(id));
-    await api.developSave(id, { ...cur, ...JSON.parse(JSON.stringify(clipboard)), local: cur.local });
-    emit("asset-developed", id);
+    try {
+      const cur = Object.assign(defaults(), await api.developGet(id));
+      await api.developSave(id, { ...cur, ...JSON.parse(JSON.stringify(clipboard)), local: cur.local });
+      emit("asset-developed", id);
+    } catch {
+      failed.push(id);
+    }
   }
+  if (failed.length) toast(`Paste failed for ${failed.length} photo(s)`, true);
   if (ids.includes(dev.id)) {
     change((s) => Object.assign(s, JSON.parse(JSON.stringify(clipboard)), { local: s.local }));
     commit();
@@ -341,8 +357,10 @@ async function pasteSettings() {
 }
 
 async function auto() {
+  const id = dev.id;
   try {
-    const a = await api.developAuto(dev.id);
+    const a = await api.developAuto(id);
+    if (id !== dev.id) return; // photo changed while computing
     change((s) => {
       s.light = a.light;
       s.color = a.color;
@@ -355,8 +373,10 @@ async function auto() {
 }
 
 async function autoWb() {
+  const id = dev.id;
   try {
-    const [temperature, tint] = await api.developAutoWb(dev.id);
+    const [temperature, tint] = await api.developAutoWb(id);
+    if (id !== dev.id) return;
     change((s) => (s.whiteBalance = { temperature, tint }));
     commit();
     refreshControls();
@@ -423,5 +443,9 @@ export function init() {
       setFocus(store.focus - 1);
     }
   });
-  window.addEventListener("beforeunload", () => flushSave());
+  // Closing the window inside the autosave delay must not lose the last
+  // edit: save first, then let the window close.
+  window.__TAURI__?.window?.getCurrentWindow?.().onCloseRequested(async () => {
+    await flushSave();
+  });
 }

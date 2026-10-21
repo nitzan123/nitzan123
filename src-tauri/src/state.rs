@@ -9,13 +9,16 @@ use std::sync::{Arc, Mutex, MutexGuard};
 pub const PREVIEW_SOURCE_DIM: u32 = 2048;
 const SOURCE_CACHE_LEN: usize = 4;
 
+/// Asset id + file size + mtime: a file edited outside the app is re-decoded.
+type SourceKey = (i64, i64, i64);
+
 pub struct AppState {
     catalog: Mutex<Catalog>,
     pub thumbs: ThumbCache,
     pub geocoder: prism_core::geocode::Geocoder,
     /// Recently decoded linear sources keyed by asset id, so slider drags
     /// don't re-decode the file.
-    sources: Mutex<VecDeque<(i64, Arc<LinearImage>)>>,
+    sources: Mutex<VecDeque<(SourceKey, Arc<LinearImage>)>>,
 }
 
 impl AppState {
@@ -33,16 +36,18 @@ impl AppState {
     }
 
     pub fn source(&self, id: i64, path: &Path) -> Result<Arc<LinearImage>> {
+        let (size, mtime) = prism_core::scan::stat(path).unwrap_or((-1, -1));
+        let key = (id, size, mtime);
         {
             let cache = self.sources.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some((_, img)) = cache.iter().find(|(i, _)| *i == id) {
+            if let Some((_, img)) = cache.iter().find(|(k, _)| *k == key) {
                 return Ok(img.clone());
             }
         }
         let img = Arc::new(prism_core::imaging::load_linear(path, PREVIEW_SOURCE_DIM)?);
         let mut cache = self.sources.lock().unwrap_or_else(|e| e.into_inner());
-        cache.retain(|(i, _)| *i != id);
-        cache.push_front((id, img.clone()));
+        cache.retain(|(k, _)| k.0 != id);
+        cache.push_front((key, img.clone()));
         cache.truncate(SOURCE_CACHE_LEN);
         Ok(img)
     }

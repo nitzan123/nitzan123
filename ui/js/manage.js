@@ -25,9 +25,11 @@ export async function reload({ keepFocus = true } = {}) {
   }
   const ids = new Set(store.assets.map((a) => a.id));
   store.selected = new Set([...store.selected].filter((id) => ids.has(id)));
+  anchor = -1; // indices changed; a stale anchor would select the wrong range
   store.focus = focusedId != null ? store.assets.findIndex((a) => a.id === focusedId) : -1;
   if (store.focus < 0 && store.assets.length) store.focus = 0;
   $("count").textContent = `${store.assets.length} photo${store.assets.length === 1 ? "" : "s"}`;
+  $("manage-export").disabled = store.assets.length === 0;
   $("breadcrumb").textContent = store.scope;
   $("empty").hidden = store.assets.length > 0 || !!hasFilters();
   relayout(true);
@@ -65,7 +67,10 @@ export async function refreshSidebar() {
 
   const q = store.query;
   const item = (label, count, active, onclick, extra, title = label) =>
-    el("li", { class: active ? "active" : "", onclick, title }, el("span", {}, label), count != null ? el("span", { class: "count" }, String(count)) : null, extra);
+    el("li", {
+      class: active ? "active" : "", onclick, title, tabindex: 0, role: "button", "aria-current": active ? "true" : null,
+      onkeydown: (e) => (e.key === "Enter" || e.key === " ") && e.target === e.currentTarget && (e.preventDefault(), onclick()),
+    }, el("span", {}, label), count != null ? el("span", { class: "count" }, String(count)) : null, extra);
 
   const total = folders.reduce((n, f) => n + f.count, 0);
   $("folder-list").replaceChildren(
@@ -129,9 +134,14 @@ function buildFilters() {
   $("new-collection").onclick = async () => {
     const name = await promptText("New collection name");
     if (!name) return;
-    const id = await api.createCollection(name);
-    const ids = store.selectedIds();
-    if (ids.length) await api.addToCollection(id, ids);
+    try {
+      const id = await api.createCollection(name);
+      const ids = store.selectedIds();
+      if (ids.length) await api.addToCollection(id, ids);
+      toast(ids.length ? `Created "${name}" with ${ids.length} photo(s)` : `Created "${name}"`);
+    } catch (e) {
+      toast(String(e), true);
+    }
     refreshSidebar();
   };
   $("manage-export").onclick = () => openExportDialog();
@@ -294,14 +304,22 @@ async function renderProps() {
   const kwInput = el("input", { type: "text", placeholder: "Add keyword ↵", list: "kw-suggest", "aria-label": "Add keyword" });
   kwInput.onkeydown = async (e) => {
     if (e.key !== "Enter" || !kwInput.value.trim()) return;
-    await api.addKeyword(ids(), kwInput.value.trim());
+    try {
+      await api.addKeyword(ids(), kwInput.value.trim());
+    } catch (err) {
+      return toast(String(err), true);
+    }
     refreshSidebar();
     renderProps();
   };
   const kwList = el("div", { class: "kw-list" },
     ...det.keywords.map((k) =>
       el("span", { class: "kw" }, k, el("button", { title: "Remove", onclick: async () => {
-        await api.removeKeyword(ids(), k);
+        try {
+          await api.removeKeyword(ids(), k);
+        } catch (err) {
+          return toast(String(err), true);
+        }
         refreshSidebar();
         renderProps();
       } }, "✕"))));
@@ -360,17 +378,29 @@ async function revealAsset(a) {
 
 // ------------------------------------------------------- attribute updates
 
-async function updateAssets(ids, call) {
+/** Runs `call`, then refreshes the affected cells. With `patch` (e.g.
+ * `{ rating: 4 }`) assets are updated locally — no per-photo round trip,
+ * so rating 5,000 selected photos stays instant. */
+async function updateAssets(ids, call, patch = null) {
   try {
     await call();
   } catch (e) {
     return toast(String(e), true);
   }
-  for (const id of ids) {
-    const d = await api.details(id).catch(() => null);
-    if (!d) continue;
-    store.replaceAsset(d.asset);
-    refreshCell(d.asset);
+  if (patch) {
+    const set = new Set(ids);
+    for (const a of store.assets) {
+      if (!set.has(a.id)) continue;
+      Object.assign(a, patch);
+      refreshCell(a);
+    }
+  } else {
+    for (const id of ids) {
+      const d = await api.details(id).catch(() => null);
+      if (!d) continue;
+      store.replaceAsset(d.asset);
+      refreshCell(d.asset);
+    }
   }
   paint();
   renderProps();
@@ -380,7 +410,7 @@ async function updateAssets(ids, call) {
 function moveFocus(e) {
   const { cols } = layout;
   const steps = { ArrowRight: 1, ArrowLeft: -1, ArrowDown: cols, ArrowUp: -cols, Home: -1e9, End: 1e9 };
-  if (!(e.key in steps)) return false;
+  if (!(e.key in steps) || !store.assets.length) return false;
   e.preventDefault();
   const next = Math.max(0, Math.min(store.assets.length - 1, store.focus + steps[e.key]));
   if (e.shiftKey) {
@@ -403,12 +433,12 @@ export function init() {
     reload();
   });
   on("quick-search", (text) => patchQuery({ text: text || undefined }));
-  on("set-rating", ({ ids, rating }) => updateAssets(ids, () => api.setRating(ids, rating)));
-  on("set-label", ({ ids, label }) => updateAssets(ids, () => api.setColorLabel(ids, label)));
-  on("set-tagged", ({ ids, tagged }) => updateAssets(ids, () => api.setTagged(ids, tagged)));
+  on("set-rating", ({ ids, rating }) => updateAssets(ids, () => api.setRating(ids, rating), { rating }));
+  on("set-label", ({ ids, label }) => updateAssets(ids, () => api.setColorLabel(ids, label), { colorLabel: label }));
+  on("set-tagged", ({ ids, tagged }) => updateAssets(ids, () => api.setTagged(ids, tagged), { tagged }));
   on("toggle-tagged", ({ ids }) => {
     const tagged = !store.assets.find((a) => a.id === ids[0])?.tagged;
-    updateAssets(ids, () => api.setTagged(ids, tagged));
+    updateAssets(ids, () => api.setTagged(ids, tagged), { tagged });
   });
   on("asset-developed", (id) => updateAssets([id], async () => {}));
   on("key", (e) => {

@@ -231,6 +231,47 @@ impl Catalog {
         Ok(res)
     }
 
+    /// Removes rows for files that disappeared anywhere at or below `root`
+    /// (only `root` itself when not `recursive`), including folders that
+    /// were deleted or emptied entirely.
+    pub fn prune_under(&self, root: &str, recursive: bool) -> Result<usize> {
+        let gone: Vec<i64> = self
+            .assets_under(root, recursive)?
+            .into_iter()
+            .filter(|(_, p)| !Path::new(p).exists())
+            .map(|(id, _)| id)
+            .collect();
+        self.delete_assets(&gone)?;
+        Ok(gone.len())
+    }
+
+    /// `(id, path)` of every asset at or below `root` (only directly in it
+    /// when not `recursive`). Lets callers check the disk without holding
+    /// the catalog lock.
+    pub fn assets_under(&self, root: &str, recursive: bool) -> Result<Vec<(i64, String)>> {
+        let root = root.trim_end_matches(['/', '\\']);
+        let mut st =
+            self.conn.prepare("SELECT a.id, a.path, f.path FROM assets a JOIN folders f ON f.id = a.folder_id")?;
+        let rows = st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (id, path, folder) = row?;
+            let below = folder.strip_prefix(root).is_some_and(|rest| rest.starts_with(['/', '\\']));
+            if folder == root || (recursive && below) {
+                out.push((id, path));
+            }
+        }
+        Ok(out)
+    }
+
+    pub fn delete_assets(&self, ids: &[i64]) -> Result<()> {
+        let mut st = self.conn.prepare_cached("DELETE FROM assets WHERE id = ?1")?;
+        for id in ids {
+            st.execute([id])?;
+        }
+        Ok(())
+    }
+
     /// Removes catalog rows whose files disappeared from `folder`.
     pub fn prune_missing(&self, folder: &str) -> Result<usize> {
         let mut st = self
@@ -272,10 +313,11 @@ impl Catalog {
             sql += &format!(" AND f.path = {}", arg(V::Text(folder.clone()), &mut args));
         }
         if let Some(text) = q.text.as_ref().map(|t| t.trim()).filter(|t| !t.is_empty()) {
-            let p = arg(V::Text(format!("%{text}%")), &mut args);
+            let p = arg(V::Text(format!("%{}%", like_escape(text))), &mut args);
             sql += &format!(
-                " AND (a.file_name LIKE {p} OR a.caption LIKE {p} OR EXISTS (SELECT 1 FROM asset_keywords ak \
-                 JOIN keywords k ON k.id = ak.keyword_id WHERE ak.asset_id = a.id AND k.name LIKE {p}))"
+                " AND (a.file_name LIKE {p} ESCAPE '\\' OR a.caption LIKE {p} ESCAPE '\\' OR EXISTS (SELECT 1 \
+                 FROM asset_keywords ak JOIN keywords k ON k.id = ak.keyword_id WHERE ak.asset_id = a.id \
+                 AND k.name LIKE {p} ESCAPE '\\'))"
             );
         }
         if let Some(r) = q.min_rating.filter(|r| *r > 0) {
@@ -307,8 +349,8 @@ impl Catalog {
             sql += &format!(" AND a.taken_at <= {}", arg(V::Text(format!("{d} 99")), &mut args));
         }
         if let Some(c) = q.camera.as_ref().filter(|c| !c.is_empty()) {
-            let p = arg(V::Text(format!("%{c}%")), &mut args);
-            sql += &format!(" AND (a.camera_make LIKE {p} OR a.camera_model LIKE {p})");
+            let p = arg(V::Text(format!("%{}%", like_escape(c))), &mut args);
+            sql += &format!(" AND (a.camera_make LIKE {p} ESCAPE '\\' OR a.camera_model LIKE {p} ESCAPE '\\')");
         }
         if let Some(d) = q.developed {
             sql += if d { " AND a.develop IS NOT NULL" } else { " AND a.develop IS NULL" };
@@ -521,6 +563,18 @@ impl Catalog {
     }
 }
 
+/// Escapes `%`, `_` and `\` for use in `LIKE … ESCAPE '\'`.
+fn like_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        if matches!(ch, '%' | '_' | '\\') {
+            out.push('\\');
+        }
+        out.push(ch);
+    }
+    out
+}
+
 fn folder_id_on(conn: &Connection, path: &str) -> Result<i64> {
     conn.execute("INSERT OR IGNORE INTO folders(path) VALUES (?1)", [path])?;
     Ok(conn.query_row("SELECT id FROM folders WHERE path = ?1", [path], |r| r.get(0))?)
@@ -658,6 +712,9 @@ mod tests {
             vec![ids[2], ids[1], ids[0]]
         );
         assert_eq!(c.keywords_of(ids[0]).unwrap(), vec!["beach".to_string()]);
+        // LIKE wildcards in user text are literal.
+        assert!(q(SearchQuery { text: Some("a_jpg".into()), ..Default::default() }).is_empty());
+        assert!(q(SearchQuery { text: Some("%".into()), ..Default::default() }).is_empty());
         c.remove_keyword(&[ids[0]], "beach").unwrap();
         assert!(c.keywords_of(ids[0]).unwrap().is_empty());
     }

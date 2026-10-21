@@ -106,16 +106,34 @@ pub fn from_xml(xml: &str) -> Sidecar {
     }
 }
 
-pub fn write_sidecar(image: &Path, sc: &Sidecar) -> Result<()> {
-    let target = sidecar_path(image);
-    let tmp = target.with_extension("xmp.tmp");
-    std::fs::write(&tmp, to_xml(sc)?)?;
-    std::fs::rename(tmp, target)?;
-    Ok(())
+/// Fallback sidecar used when `photo.ext.xmp` belongs to another program.
+pub fn private_sidecar_path(image: &Path) -> PathBuf {
+    let mut s = image.as_os_str().to_owned();
+    s.push(".prism.xmp");
+    PathBuf::from(s)
 }
 
+const TOOLKIT_MARK: &str = "x:xmptk=\"Prism Studio\"";
+
+/// Writes the sidecar. A `photo.ext.xmp` written by another program
+/// (darktable, Lightroom, …) is never overwritten — it may hold that
+/// program's edit history — so Prism then uses `photo.ext.prism.xmp`.
+pub fn write_sidecar(image: &Path, sc: &Sidecar) -> Result<PathBuf> {
+    let standard = sidecar_path(image);
+    let foreign = std::fs::read_to_string(&standard).is_ok_and(|x| !x.contains(TOOLKIT_MARK));
+    let target = if foreign { private_sidecar_path(image) } else { standard };
+    let tmp = target.with_extension(format!("{}.tmp", std::process::id()));
+    std::fs::write(&tmp, to_xml(sc)?)?;
+    std::fs::rename(tmp, &target)?;
+    Ok(target)
+}
+
+/// Prism's own sidecar if present, else a standard one from any program.
 pub fn read_sidecar(image: &Path) -> Option<Sidecar> {
-    std::fs::read_to_string(sidecar_path(image)).ok().map(|x| from_xml(&x))
+    std::fs::read_to_string(private_sidecar_path(image))
+        .or_else(|_| std::fs::read_to_string(sidecar_path(image)))
+        .ok()
+        .map(|x| from_xml(&x))
 }
 
 #[cfg(test)]
@@ -147,6 +165,22 @@ mod tests {
         let sc = from_xml(xml);
         assert_eq!((sc.rating, sc.color_label, sc.keywords.clone()), (5, 1, vec!["cat".to_string()]));
         assert!(sc.develop.is_none());
+    }
+
+    #[test]
+    fn never_overwrites_another_programs_sidecar() {
+        let dir = tempfile::tempdir().unwrap();
+        let img = dir.path().join("x.NEF");
+        let foreign = r#"<x:xmpmeta x:xmptk="XMP Core 4.4.0-Exiv2"><rdf:Description xmp:Rating="3"
+            darktable:history="precious"/></x:xmpmeta>"#;
+        std::fs::write(sidecar_path(&img), foreign).unwrap();
+        // Import reads the foreign rating…
+        assert_eq!(read_sidecar(&img).unwrap().rating, 3);
+        // …but writing goes to Prism's private sidecar.
+        let written = write_sidecar(&img, &Sidecar { rating: 5, ..Default::default() }).unwrap();
+        assert_eq!(written, private_sidecar_path(&img));
+        assert_eq!(std::fs::read_to_string(sidecar_path(&img)).unwrap(), foreign);
+        assert_eq!(read_sidecar(&img).unwrap().rating, 5);
     }
 
     #[test]

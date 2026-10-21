@@ -57,7 +57,13 @@ function wireProgress() {
 function wireKeys() {
   document.addEventListener("keydown", (e) => {
     const t = e.target;
-    if (t.matches?.("input, textarea, select") || document.querySelector("dialog[open]")) return;
+    // Ignore typing contexts only; sliders/checkboxes keep shortcuts working.
+    const typing = t.matches?.("textarea, select, input:not([type=range]):not([type=checkbox]):not([type=radio])");
+    if (typing || document.querySelector("dialog[open]")) return;
+    // Arrow/Page keys on a focused slider adjust the slider, not the photo.
+    if (t.matches?.("input[type=range]") && /^(Arrow|Page|Home|End)/.test(e.key)) return;
+    // Let focused buttons/links/summaries handle their own Enter/Space.
+    const activatable = t.matches?.("button, a, summary, [role=button]");
     const ctrl = e.ctrlKey || e.metaKey;
     const ids = store.selectedIds();
 
@@ -75,9 +81,11 @@ function wireKeys() {
       setMode("edit");
     } else if (!ctrl && e.key.toLowerCase() === "g") {
       setMode("manage");
+    } else if (e.key === "?") {
+      document.getElementById("help-dialog").showModal();
     } else if (e.key === "Escape" && store.mode !== "manage") {
       setMode("manage");
-    } else if ((e.key === "Enter" || e.key === " ") && store.mode === "manage" && store.current) {
+    } else if ((e.key === "Enter" || e.key === " ") && !activatable && store.mode === "manage" && store.current) {
       e.preventDefault();
       setMode("view");
     } else {
@@ -88,6 +96,7 @@ function wireKeys() {
 
 document.querySelectorAll(".modes button").forEach((b) => b.addEventListener("click", () => setMode(b.dataset.mode)));
 document.getElementById("add-folder").addEventListener("click", addFolder);
+document.getElementById("help-btn").addEventListener("click", () => document.getElementById("help-dialog").showModal());
 document.getElementById("empty-add").addEventListener("click", addFolder);
 document.getElementById("quick-search").addEventListener("input", (e) => {
   clearTimeout(e.target._t);

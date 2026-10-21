@@ -107,14 +107,17 @@ pub fn decode_raw(path: &Path) -> Result<LinearImage> {
 
     let rgb_cam = camera_to_srgb(&raw.xyz_to_cam);
 
-    // Respect crops [top, right, bottom, left]; align to the 2×2 pattern.
+    // Superpixel cell: 2×2 for Bayer, 3×3 for Fuji X-Trans (6×6 pattern,
+    // every aligned 3×3 block holds R, G and B). Respect the crops
+    // [top, right, bottom, left] and align cells to the pattern.
+    let cell = if raw.cfa.width == 6 && raw.cfa.height == 6 { 3 } else { 2 };
     let [ct, cr, cb, cl] = raw.crops;
-    let x0 = cl & !1;
-    let y0 = ct & !1;
+    let x0 = cl.div_ceil(cell) * cell;
+    let y0 = ct.div_ceil(cell) * cell;
     let x1 = w.saturating_sub(cr);
     let y1 = h.saturating_sub(cb);
-    let ow = (x1.saturating_sub(x0)) / 2;
-    let oh = (y1.saturating_sub(y0)) / 2;
+    let ow = (x1.saturating_sub(x0)) / cell;
+    let oh = (y1.saturating_sub(y0)) / cell;
     if ow == 0 || oh == 0 {
         return Err(err("empty image after crop".into()));
     }
@@ -125,10 +128,10 @@ pub fn decode_raw(path: &Path) -> Result<LinearImage> {
         for ox in 0..ow {
             let mut acc = [0f32; 3];
             let mut n = [0f32; 3];
-            for dy in 0..2 {
-                for dx in 0..2 {
-                    let y = y0 + oy * 2 + dy;
-                    let x = x0 + ox * 2 + dx;
+            for dy in 0..cell {
+                for dx in 0..cell {
+                    let y = y0 + oy * cell + dy;
+                    let x = x0 + ox * cell + dx;
                     let c = raw.cfa.color_at(y, x).min(3);
                     let ch = if c == 3 { 1 } else { c };
                     let v = (data[y * w + x] - black[c]) / (white[c] - black[c]).max(1.0);
@@ -136,7 +139,11 @@ pub fn decode_raw(path: &Path) -> Result<LinearImage> {
                     n[ch] += 1.0;
                 }
             }
-            let cam = [acc[0] / n[0].max(1.0) * wb[0], acc[1] / n[1].max(1.0) * wb[1], acc[2] / n[2].max(1.0) * wb[2]];
+            // A channel absent from the cell (unusual CFA) borrows green so
+            // it never turns into a coloured dot.
+            let g = if n[1] > 0.0 { acc[1] / n[1] } else { 0.0 };
+            let mean = |c: usize| if n[c] > 0.0 { acc[c] / n[c] } else { g };
+            let cam = [mean(0) * wb[0], mean(1) * wb[1], mean(2) * wb[2]];
             for c in 0..3 {
                 row[ox * 3 + c] = (rgb_cam[c][0] * cam[0] + rgb_cam[c][1] * cam[1] + rgb_cam[c][2] * cam[2]).max(0.0);
             }

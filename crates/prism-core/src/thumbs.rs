@@ -71,7 +71,11 @@ impl ThumbCache {
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent)?;
         }
-        let tmp = target.with_extension("tmp");
+        // Unique temp name: the indexer and the image protocol may build the
+        // same thumbnail concurrently; each must rename its own complete file.
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let tmp = target.with_extension(format!("{}-{n}.tmp", std::process::id()));
         {
             let mut f = std::io::BufWriter::new(fs::File::create(&tmp)?);
             image::codecs::jpeg::JpegEncoder::new_with_quality(&mut f, 82).encode_image(img)?;

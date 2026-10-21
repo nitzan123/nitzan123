@@ -39,8 +39,8 @@ function savePrefs(p) {
 
 function readForm() {
   return {
-    quality: Number($("exp-quality").value) || 92,
-    size: Number($("exp-size").value) || 0,
+    quality: Math.round(Math.min(100, Math.max(10, Number($("exp-quality").value) || 92))),
+    size: Math.round(Math.min(20000, Math.max(0, Number($("exp-size").value) || 0))),
     caption: $("cap-enabled").checked,
     date: $("cap-date").checked,
     dateFormat: $("cap-date-format").value,
@@ -138,6 +138,7 @@ export async function openExportDialog(beforeExport = async () => {}) {
   writeForm(loadPrefs());
   $("exp-count").textContent = `${ids.length} photo${ids.length === 1 ? "" : "s"} · develop settings applied · originals untouched`;
   syncCaptionUi();
+  dlg.returnValue = ""; // Esc must not reuse the previous dialog's "ok"
   dlg.showModal();
   const ok = await new Promise((r) => dlg.addEventListener("close", () => r(dlg.returnValue === "ok"), { once: true }));
   const prefs = readForm();

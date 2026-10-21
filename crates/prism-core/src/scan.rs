@@ -28,6 +28,9 @@ pub fn list_media(root: &Path, recursive: bool) -> Vec<PathBuf> {
         .filter(|e| e.file_type().is_file())
         .filter(|e| !e.file_name().to_string_lossy().starts_with('.'))
         .map(|e| e.into_path())
+        // The catalog stores paths as text; a non-UTF-8 name (e.g. a legacy
+        // code-page archive on Linux) can't round-trip, so skip it.
+        .filter(|p| p.to_str().is_some())
         .filter(|p| is_supported(p))
         .collect()
 }

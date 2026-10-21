@@ -86,8 +86,8 @@ fn geometry(mut b: Buf, g: &Geometry) -> Buf {
         b = straighten(&b, g.straighten.clamp(-45.0, 45.0));
     }
     if let Some(c) = g.crop.map(|c| c.clamped()) {
-        let x0 = (c.x * b.w as f32).round() as usize;
-        let y0 = (c.y * b.h as f32).round() as usize;
+        let x0 = ((c.x * b.w as f32).round() as usize).min(b.w - 1);
+        let y0 = ((c.y * b.h as f32).round() as usize).min(b.h - 1);
         let cw = ((c.w * b.w as f32).round() as usize).clamp(1, b.w - x0);
         let ch = ((c.h * b.h as f32).round() as usize).clamp(1, b.h - y0);
         let mut out = Buf::new(cw, ch);
@@ -140,6 +140,12 @@ fn linear_stage(b: &mut Buf, s: &DevelopSettings) {
     let (hl, sh, wh, bl, ct) =
         (l.highlights / 100.0, l.shadows / 100.0, l.whites / 100.0, l.blacks / 100.0, l.contrast / 100.0);
     let tone_active = [hl, sh, wh, bl, ct].iter().any(|v| v.abs() > 1e-4);
+    // Roll-off only when the user pushed light around; an unadjusted image
+    // (e.g. crop-only edit) must keep its exact tones, incl. pure white.
+    let rolloff = tone_active
+        || s.light.exposure.abs() > 1e-4
+        || s.white_balance.temperature.abs() > 1e-3
+        || s.white_balance.tint.abs() > 1e-3;
 
     b.px.par_iter_mut().for_each(|p| {
         let mut q = [p[0] * wb[0] * gain, p[1] * wb[1] * gain, p[2] * wb[2] * gain];
@@ -157,7 +163,7 @@ fn linear_stage(b: &mut Buf, s: &DevelopSettings) {
                 }
             }
             // Soft roll-off so blown channels compress instead of clipping hard.
-            if v > 0.9 {
+            if rolloff && v > 0.9 {
                 v = 0.9 + 0.1 * (1.0 - (-(v - 0.9) / 0.1).exp());
             }
             let ny = v.max(0.0).powf(GAMMA);
@@ -500,6 +506,19 @@ mod tests {
         });
         let out = render(&grey(50, 50, 0.1), &s);
         assert!(out.get_pixel(25, 25).0[0] > out.get_pixel(2, 2).0[0] + 0.15);
+    }
+
+    #[test]
+    fn crop_only_edit_keeps_pure_white_and_edge_crops_do_not_panic() {
+        let mut s = DevelopSettings::default();
+        s.geometry.crop = Some(CropRect { x: 0.1, y: 0.1, w: 0.5, h: 0.5 });
+        let out = render_to_rgb8(&grey(40, 40, 1.0), &s);
+        assert!(out.pixels().all(|p| p.0 == [255, 255, 255]));
+        for (w, h) in [(40, 40), (3, 2), (1, 1)] {
+            s.geometry.crop = Some(CropRect { x: 0.999, y: 0.995, w: 0.5, h: 0.5 });
+            let out = render(&grey(w, h, 0.2), &s);
+            assert!(out.width() >= 1 && out.height() >= 1);
+        }
     }
 
     #[test]

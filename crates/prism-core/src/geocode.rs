@@ -18,11 +18,15 @@ const ENDPOINT: &str = "https://nominatim.openstreetmap.org/reverse";
 const USER_AGENT: &str =
     concat!("PrismStudio/", env!("CARGO_PKG_VERSION"), " (+https://github.com/nitzan123/nitzan123)");
 const MIN_INTERVAL: Duration = Duration::from_millis(1100);
+/// After a network failure, skip lookups for this long so a large export
+/// doesn't wait out a timeout per photo while offline.
+const OFFLINE_BACKOFF: Duration = Duration::from_secs(120);
 
 pub struct Geocoder {
     agent: ureq::Agent,
     last_request: Mutex<Option<Instant>>,
     memo: Mutex<HashMap<String, Option<String>>>,
+    offline_since: Mutex<Option<Instant>>,
 }
 
 impl Default for Geocoder {
@@ -38,7 +42,12 @@ impl Geocoder {
             .timeout(Duration::from_secs(15))
             .try_proxy_from_env(true)
             .build();
-        Self { agent, last_request: Mutex::new(None), memo: Mutex::new(HashMap::new()) }
+        Self {
+            agent,
+            last_request: Mutex::new(None),
+            memo: Mutex::new(HashMap::new()),
+            offline_since: Mutex::new(None),
+        }
     }
 
     /// Place name for the coordinates, `None` if OSM knows no place there
@@ -48,6 +57,11 @@ impl Geocoder {
         let key = format!("{}|{language}", cache_key(lat, lon));
         if let Some(hit) = self.memo.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
             return Ok(hit.clone());
+        }
+        if let Some(t) = *self.offline_since.lock().unwrap_or_else(|e| e.into_inner()) {
+            if t.elapsed() < OFFLINE_BACKOFF {
+                return Err(Error::Network("offline (recent lookup failed)".into()));
+            }
         }
         self.throttle();
         let mut req = self
@@ -60,7 +74,16 @@ impl Geocoder {
         if !language.is_empty() {
             req = req.query("accept-language", language);
         }
-        let resp = req.call().map_err(|e| Error::Network(e.to_string()))?;
+        let resp = match req.call() {
+            Ok(r) => r,
+            // A transport failure means we're offline/blocked: back off.
+            // HTTP errors (e.g. 429) also back off; Nominatim asks for that.
+            Err(e) => {
+                *self.offline_since.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
+                return Err(Error::Network(e.to_string()));
+            }
+        };
+        *self.offline_since.lock().unwrap_or_else(|e| e.into_inner()) = None;
         let json: Value = serde_json::from_reader(resp.into_reader())?;
         let place = format_place(&json);
         self.memo.lock().unwrap_or_else(|e| e.into_inner()).insert(key, place.clone());

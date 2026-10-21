@@ -44,24 +44,36 @@ pub fn load_linear(path: &Path, max_dim: u32) -> Result<LinearImage> {
     let ext = ext_of(path);
     let orientation = read_exif(path).orientation;
     let lin = if is_raw_ext(&ext) {
-        let lin = decode_raw(path)?;
-        let lin = downscale_linear(lin, max_dim);
-        let dynimg = apply_orientation(DynamicImage::ImageRgb32F(lin), orientation);
-        dynimg.to_rgb32f()
-    } else if RASTER_EXTENSIONS.contains(&ext.as_str()) {
-        let img = apply_orientation(fit(image::open(path)?, max_dim), orientation);
-        let mut f = img.to_rgb32f();
-        let lut = srgb_to_linear_lut();
-        for p in f.pixels_mut() {
-            for c in 0..3 {
-                p.0[c] = lut[(p.0[c].clamp(0.0, 1.0) * 4095.0).round() as usize];
+        match decode_raw(path) {
+            Ok(lin) => {
+                apply_orientation(DynamicImage::ImageRgb32F(downscale_linear(lin, max_dim)), orientation).to_rgb32f()
+            }
+            // Sensor data we can't decode (e.g. CR3): develop from the
+            // embedded camera JPEG rather than refusing the file.
+            Err(e) => {
+                let bytes = std::fs::read(path)?;
+                let jpeg = extract_embedded_jpeg(&bytes).ok_or(e)?;
+                let img = apply_orientation(fit(image::load_from_memory(&jpeg)?, max_dim), orientation);
+                to_linear(img.to_rgb32f())
             }
         }
-        f
+    } else if RASTER_EXTENSIONS.contains(&ext.as_str()) {
+        let img = apply_orientation(fit(image::open(path)?, max_dim), orientation);
+        to_linear(img.to_rgb32f())
     } else {
         return Err(Error::Unsupported(path.to_path_buf()));
     };
     Ok(lin)
+}
+
+fn to_linear(mut f: image::Rgb32FImage) -> LinearImage {
+    let lut = srgb_to_linear_lut();
+    for p in f.pixels_mut() {
+        for c in 0..3 {
+            p.0[c] = lut[(p.0[c].clamp(0.0, 1.0) * 4095.0).round() as usize];
+        }
+    }
+    f
 }
 
 fn fit(img: DynamicImage, max_dim: u32) -> DynamicImage {
