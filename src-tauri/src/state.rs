@@ -33,6 +33,9 @@ pub struct AppState {
     pub thumbs: ThumbCache,
     pub geocoder: prism_core::geocode::Geocoder,
     pub lenses: LensStore,
+    pub ai: prism_core::ai::Models,
+    pub ai_running: std::sync::atomic::AtomicBool,
+    pub ai_cancel: std::sync::atomic::AtomicBool,
     /// Recently decoded linear sources keyed by asset id, so slider drags
     /// don't re-decode the file.
     sources: Mutex<VecDeque<(SourceKey, Arc<LinearImage>)>>,
@@ -45,6 +48,9 @@ impl AppState {
             thumbs: ThumbCache::new(cache_dir.join("thumbs"))?,
             geocoder: prism_core::geocode::Geocoder::new(),
             lenses: LensStore { dir: data_dir.join("lensfun"), db: Mutex::new(None) },
+            ai: prism_core::ai::Models::new(data_dir.join("ai")),
+            ai_running: Default::default(),
+            ai_cancel: Default::default(),
             sources: Mutex::new(VecDeque::new()),
         })
     }

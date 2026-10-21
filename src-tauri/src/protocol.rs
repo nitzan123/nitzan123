@@ -48,6 +48,9 @@ fn serve(state: &AppState, uri: &tauri::http::Uri) -> Result<Vec<u8>, String> {
     let mut parts = uri.path().trim_start_matches('/').split('/');
     let kind = parts.next().unwrap_or_default();
     let id: i64 = parts.next().and_then(|s| s.parse().ok()).ok_or("bad id")?;
+    if kind == "face" {
+        return face_thumb(state, id);
+    }
     let max: u32 = uri
         .query()
         .and_then(|q| q.split('&').find_map(|kv| kv.strip_prefix("max=")))
@@ -89,6 +92,35 @@ fn serve(state: &AppState, uri: &tauri::http::Uri) -> Result<Vec<u8>, String> {
         }
         _ => Err("unknown route".into()),
     }
+}
+
+/// Square crop around a detected face (with margin), 160 px.
+fn face_thumb(state: &AppState, face_id: i64) -> Result<Vec<u8>, String> {
+    let (face, asset) = {
+        let cat = state.catalog();
+        let f = cat.face(face_id).map_err(|e| e.to_string())?;
+        let a = cat.asset(f.asset_id).map_err(|e| e.to_string())?;
+        (f, a)
+    };
+    let path = Path::new(&asset.path);
+    let variant = format!("face:{:?}", face.rect);
+    let file = state
+        .thumbs
+        .ensure_variant(path, asset.mtime, asset.size, &variant, || {
+            let img = prism_core::imaging::load_display(path, 1600)?;
+            let (w, h) = (img.width() as f32, img.height() as f32);
+            let [x, y, fw, fh] = face.rect;
+            let side = (fw * w).max(fh * h) * 1.6;
+            let cx = (x + fw / 2.0) * w;
+            let cy = (y + fh / 2.0) * h;
+            let x0 = (cx - side / 2.0).clamp(0.0, (w - side).max(0.0)) as u32;
+            let y0 = (cy - side / 2.0).clamp(0.0, (h - side).max(0.0)) as u32;
+            let s = (side as u32).min(img.width() - x0).min(img.height() - y0).max(1);
+            let crop = image::imageops::crop_imm(&img, x0, y0, s, s).to_image();
+            Ok(image::imageops::resize(&crop, 160, 160, image::imageops::FilterType::Triangle))
+        })
+        .map_err(|e| e.to_string())?;
+    std::fs::read(file).map_err(|e| e.to_string())
 }
 
 fn render_view(path: &Path, max: u32, s: &DevelopSettings) -> Result<image::RgbImage, String> {

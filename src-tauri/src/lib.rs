@@ -1,6 +1,7 @@
 //! Tauri shell: owns app state and exposes `prism-core` to the web UI via
 //! commands plus a `prism://` image protocol (thumbnails, previews).
 
+mod ai_job;
 mod commands;
 mod indexer;
 mod protocol;
@@ -58,6 +59,16 @@ pub fn run() {
             commands::lens_db_status,
             commands::lens_db_download,
             commands::lens_profile,
+            commands::ai_status,
+            commands::ai_download,
+            commands::ai_analyze,
+            commands::ai_cancel,
+            commands::ai_details,
+            commands::smart_search,
+            commands::persons,
+            commands::name_person,
+            commands::set_face_name,
+            commands::ai_mask,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Prism Studio");

@@ -12,6 +12,7 @@ export const urls = {
   thumb: (a) => `${PROTO}thumb/${a.id}?m=${a.mtime}&v=${bust.get(a.id) || 0}`,
   view: (a, max = 2560) => `${PROTO}view/${a.id}?max=${max}&m=${a.mtime}&v=${bust.get(a.id) || 0}`,
   invalidate: (id) => bust.set(id, (bust.get(id) || 0) + 1),
+  face: (faceId) => `${PROTO}face/${faceId}`,
 };
 
 export const api = {
@@ -45,6 +46,16 @@ export const api = {
   lensDbStatus: () => invoke("lens_db_status"),
   lensDbDownload: () => invoke("lens_db_download"),
   lensProfile: (id) => invoke("lens_profile", { id }),
+  aiStatus: () => invoke("ai_status"),
+  aiDownload: () => invoke("ai_download"),
+  aiAnalyze: () => invoke("ai_analyze"),
+  aiCancel: () => invoke("ai_cancel"),
+  aiDetails: (id) => invoke("ai_details", { id }),
+  smartSearch: (text, limit) => invoke("smart_search", { text, limit }),
+  persons: () => invoke("persons"),
+  namePerson: (personId, name) => invoke("name_person", { personId, name }),
+  setFaceName: (faceId, name) => invoke("set_face_name", { faceId, name }),
+  aiMask: (id, kind) => invoke("ai_mask", { id, kind }),
   pickFolder: (title) => invoke("plugin:dialog|open", { options: { directory: true, multiple: false, title } }),
   listen: (event, cb) => T.event.listen(event, (e) => cb(e.payload)),
 };

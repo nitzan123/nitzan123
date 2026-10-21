@@ -65,6 +65,31 @@ CREATE TABLE IF NOT EXISTS collection_assets (
     asset_id      INTEGER NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
     PRIMARY KEY (collection_id, asset_id)
 );
+CREATE TABLE IF NOT EXISTS ai_analysis (
+    asset_id  INTEGER PRIMARY KEY REFERENCES assets(id) ON DELETE CASCADE,
+    mtime     INTEGER NOT NULL,
+    embedding BLOB
+);
+CREATE TABLE IF NOT EXISTS ai_tags (
+    asset_id INTEGER NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+    label    TEXT NOT NULL,
+    score    REAL NOT NULL,
+    PRIMARY KEY (asset_id, label)
+);
+CREATE TABLE IF NOT EXISTS persons (
+    id   INTEGER PRIMARY KEY,
+    name TEXT
+);
+CREATE TABLE IF NOT EXISTS faces (
+    id        INTEGER PRIMARY KEY,
+    asset_id  INTEGER NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+    x REAL NOT NULL, y REAL NOT NULL, w REAL NOT NULL, h REAL NOT NULL,
+    score     REAL NOT NULL,
+    embedding BLOB NOT NULL,
+    person_id INTEGER REFERENCES persons(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS faces_asset ON faces(asset_id);
+CREATE INDEX IF NOT EXISTS faces_person ON faces(person_id);
 CREATE TABLE IF NOT EXISTS places (
     key  TEXT PRIMARY KEY,
     name TEXT
@@ -158,6 +183,52 @@ pub struct SavedSearch {
     pub id: i64,
     pub name: String,
     pub query: SearchQuery,
+}
+
+/// AI results for one asset, written by `store_analysis`.
+#[derive(Debug, Clone, Default)]
+pub struct Analysis {
+    pub asset_id: i64,
+    pub mtime: i64,
+    pub embedding: Option<Vec<f32>>,
+    pub tags: Vec<(String, f32)>,
+    pub faces: Vec<AnalyzedFace>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AnalyzedFace {
+    /// x, y, w, h normalised to the (orientation-corrected) image, 0…1.
+    pub rect: [f32; 4],
+    pub score: f32,
+    pub embedding: Vec<f32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct FaceRow {
+    pub id: i64,
+    pub asset_id: i64,
+    pub rect: [f32; 4],
+    pub person_id: Option<i64>,
+    pub person_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PersonRow {
+    pub id: i64,
+    pub name: Option<String>,
+    pub photos: i64,
+    pub cover_face: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AiCounts {
+    pub analyzed: i64,
+    pub total: i64,
+    pub faces: i64,
+    pub people: i64,
 }
 
 /// What `upsert_scanned` did with a file.
@@ -334,6 +405,12 @@ impl Catalog {
                 " AND EXISTS (SELECT 1 FROM asset_keywords ak JOIN keywords k ON k.id = ak.keyword_id \
                  WHERE ak.asset_id = a.id AND k.name = {})",
                 arg(V::Text(kw.clone()), &mut args)
+            );
+        }
+        if let Some(p) = q.person_id {
+            sql += &format!(
+                " AND EXISTS (SELECT 1 FROM faces fc WHERE fc.asset_id = a.id AND fc.person_id = {})",
+                arg(V::Integer(p), &mut args)
             );
         }
         if let Some(c) = q.collection_id {
@@ -532,6 +609,219 @@ impl Catalog {
         Ok(())
     }
 
+    // --------------------------------------------------------------------- AI
+
+    /// Assets that have never been analysed or changed since.
+    pub fn ai_pending(&self) -> Result<Vec<(i64, String, i64)>> {
+        let mut st = self.conn.prepare(
+            "SELECT a.id, a.path, a.mtime FROM assets a LEFT JOIN ai_analysis x ON x.asset_id = a.id \
+             WHERE x.asset_id IS NULL OR x.mtime != a.mtime ORDER BY a.id",
+        )?;
+        let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub fn ai_counts(&self) -> Result<AiCounts> {
+        let q = |sql: &str| -> Result<i64> { Ok(self.conn.query_row(sql, [], |r| r.get(0))?) };
+        Ok(AiCounts {
+            analyzed: q("SELECT COUNT(*) FROM ai_analysis x JOIN assets a ON a.id = x.asset_id AND a.mtime = x.mtime")?,
+            total: q("SELECT COUNT(*) FROM assets")?,
+            faces: q("SELECT COUNT(*) FROM faces")?,
+            people: q("SELECT COUNT(*) FROM persons p WHERE p.name IS NOT NULL OR \
+                       (SELECT COUNT(*) FROM faces f WHERE f.person_id = p.id) >= 2")?,
+        })
+    }
+
+    /// Replaces an asset's AI results in one transaction.
+    pub fn store_analysis(&mut self, a: &Analysis) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        tx.execute("DELETE FROM ai_tags WHERE asset_id = ?1", [a.asset_id])?;
+        tx.execute("DELETE FROM faces WHERE asset_id = ?1", [a.asset_id])?;
+        tx.execute(
+            "INSERT OR REPLACE INTO ai_analysis(asset_id, mtime, embedding) VALUES (?1, ?2, ?3)",
+            params![a.asset_id, a.mtime, a.embedding.as_ref().map(|e| crate::ai::to_blob(e))],
+        )?;
+        for (label, score) in &a.tags {
+            tx.execute(
+                "INSERT INTO ai_tags(asset_id, label, score) VALUES (?1, ?2, ?3)",
+                params![a.asset_id, label, score],
+            )?;
+        }
+        for f in &a.faces {
+            tx.execute(
+                "INSERT INTO faces(asset_id, x, y, w, h, score, embedding) VALUES (?1,?2,?3,?4,?5,?6,?7)",
+                params![
+                    a.asset_id,
+                    f.rect[0],
+                    f.rect[1],
+                    f.rect[2],
+                    f.rect[3],
+                    f.score,
+                    crate::ai::to_blob(&f.embedding)
+                ],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn embeddings(&self) -> Result<Vec<(i64, Vec<f32>)>> {
+        let mut st = self.conn.prepare("SELECT asset_id, embedding FROM ai_analysis WHERE embedding IS NOT NULL")?;
+        let rows = st.query_map([], |r| Ok((r.get::<_, i64>(0)?, crate::ai::from_blob(&r.get::<_, Vec<u8>>(1)?))))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub fn ai_tags(&self, id: i64) -> Result<Vec<(String, f32)>> {
+        let mut st = self.conn.prepare("SELECT label, score FROM ai_tags WHERE asset_id = ?1 ORDER BY score DESC")?;
+        let rows = st.query_map([id], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub fn faces_of(&self, id: i64) -> Result<Vec<FaceRow>> {
+        let mut st = self.conn.prepare(
+            "SELECT f.id, f.asset_id, f.x, f.y, f.w, f.h, f.person_id, p.name FROM faces f \
+             LEFT JOIN persons p ON p.id = f.person_id WHERE f.asset_id = ?1 ORDER BY f.x",
+        )?;
+        let rows = st.query_map([id], face_row)?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub fn face(&self, face_id: i64) -> Result<FaceRow> {
+        self.conn
+            .query_row(
+                "SELECT f.id, f.asset_id, f.x, f.y, f.w, f.h, f.person_id, p.name FROM faces f \
+                 LEFT JOIN persons p ON p.id = f.person_id WHERE f.id = ?1",
+                [face_id],
+                face_row,
+            )
+            .optional()?
+            .ok_or_else(|| Error::NotFound(format!("face {face_id}")))
+    }
+
+    /// People with a name or seen at least twice, most photographed first.
+    pub fn persons(&self) -> Result<Vec<PersonRow>> {
+        let mut st = self.conn.prepare(
+            "SELECT p.id, p.name, COUNT(DISTINCT f.asset_id), MAX(f.id) FROM persons p JOIN faces f ON f.person_id = p.id \
+             GROUP BY p.id HAVING p.name IS NOT NULL OR COUNT(*) >= 2 \
+             ORDER BY p.name IS NULL, COUNT(DISTINCT f.asset_id) DESC, p.name COLLATE NOCASE",
+        )?;
+        let rows = st.query_map([], |r| {
+            Ok(PersonRow { id: r.get(0)?, name: r.get(1)?, photos: r.get(2)?, cover_face: r.get(3)? })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Groups unassigned faces into people: each joins the person whose mean
+    /// embedding is most similar (≥ `threshold`), otherwise starts a new one.
+    pub fn cluster_faces(&mut self, threshold: f32) -> Result<usize> {
+        let tx = self.conn.transaction()?;
+        let mut centroids: Vec<(i64, Vec<f32>, f32)> = Vec::new(); // (person, sum, n)
+        {
+            let mut st = tx.prepare("SELECT person_id, embedding FROM faces WHERE person_id IS NOT NULL")?;
+            let rows =
+                st.query_map([], |r| Ok((r.get::<_, i64>(0)?, crate::ai::from_blob(&r.get::<_, Vec<u8>>(1)?))))?;
+            for row in rows {
+                let (p, e) = row?;
+                match centroids.iter_mut().find(|c| c.0 == p) {
+                    Some(c) => {
+                        c.1.iter_mut().zip(&e).for_each(|(a, b)| *a += b);
+                        c.2 += 1.0;
+                    }
+                    None => centroids.push((p, e, 1.0)),
+                }
+            }
+        }
+        let unassigned: Vec<(i64, Vec<f32>)> = {
+            let mut st = tx.prepare("SELECT id, embedding FROM faces WHERE person_id IS NULL ORDER BY id")?;
+            let rows =
+                st.query_map([], |r| Ok((r.get::<_, i64>(0)?, crate::ai::from_blob(&r.get::<_, Vec<u8>>(1)?))))?;
+            rows.collect::<rusqlite::Result<_>>()?
+        };
+        for (face_id, e) in &unassigned {
+            let best = centroids
+                .iter()
+                .enumerate()
+                .map(|(i, c)| {
+                    let mut m: Vec<f32> = c.1.iter().map(|v| v / c.2).collect();
+                    crate::ai::normalize(&mut m);
+                    (i, crate::ai::cosine(&m, e))
+                })
+                .max_by(|a, b| a.1.total_cmp(&b.1));
+            let idx = match best {
+                Some((i, s)) if s >= threshold => i,
+                _ => {
+                    tx.execute("INSERT INTO persons(name) VALUES (NULL)", [])?;
+                    centroids.push((tx.last_insert_rowid(), vec![0.0; e.len()], 0.0));
+                    centroids.len() - 1
+                }
+            };
+            let c = &mut centroids[idx];
+            c.1.iter_mut().zip(e).for_each(|(a, b)| *a += b);
+            c.2 += 1.0;
+            tx.execute("UPDATE faces SET person_id = ?2 WHERE id = ?1", params![face_id, c.0])?;
+        }
+        tx.execute(
+            "DELETE FROM persons WHERE id NOT IN (SELECT DISTINCT person_id FROM faces WHERE person_id IS NOT NULL)",
+            [],
+        )?;
+        tx.commit()?;
+        Ok(unassigned.len())
+    }
+
+    /// Names a person. If another person already has that name, the two are
+    /// merged (the same person found in separate clusters). Returns the id
+    /// that now holds the name.
+    pub fn name_person(&mut self, person_id: i64, name: &str) -> Result<i64> {
+        let name = name.trim();
+        let tx = self.conn.transaction()?;
+        let existing: Option<i64> = tx
+            .query_row(
+                "SELECT id FROM persons WHERE name = ?1 COLLATE NOCASE AND id != ?2",
+                params![name, person_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let target = match existing {
+            Some(other) => {
+                tx.execute("UPDATE faces SET person_id = ?1 WHERE person_id = ?2", params![other, person_id])?;
+                tx.execute("DELETE FROM persons WHERE id = ?1", [person_id])?;
+                other
+            }
+            None => {
+                tx.execute(
+                    "UPDATE persons SET name = ?2 WHERE id = ?1",
+                    params![person_id, Some(name).filter(|n| !n.is_empty())],
+                )?;
+                person_id
+            }
+        };
+        tx.commit()?;
+        Ok(target)
+    }
+
+    /// Assigns one face to the person called `name` (created if needed).
+    pub fn set_face_name(&mut self, face_id: i64, name: &str) -> Result<()> {
+        let name = name.trim();
+        let tx = self.conn.transaction()?;
+        let pid: i64 = match tx
+            .query_row("SELECT id FROM persons WHERE name = ?1 COLLATE NOCASE", [name], |r| r.get(0))
+            .optional()?
+        {
+            Some(id) => id,
+            None => {
+                tx.execute("INSERT INTO persons(name) VALUES (?1)", [name])?;
+                tx.last_insert_rowid()
+            }
+        };
+        tx.execute("UPDATE faces SET person_id = ?2 WHERE id = ?1", params![face_id, pid])?;
+        tx.execute(
+            "DELETE FROM persons WHERE id NOT IN (SELECT DISTINCT person_id FROM faces WHERE person_id IS NOT NULL)",
+            [],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
     // ------------------------------------------------------------- similarity
 
     pub fn set_phash(&self, id: i64, hash: u64) -> Result<()> {
@@ -573,6 +863,16 @@ fn like_escape(s: &str) -> String {
         out.push(ch);
     }
     out
+}
+
+fn face_row(r: &Row<'_>) -> rusqlite::Result<FaceRow> {
+    Ok(FaceRow {
+        id: r.get(0)?,
+        asset_id: r.get(1)?,
+        rect: [r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?],
+        person_id: r.get(6)?,
+        person_name: r.get(7)?,
+    })
 }
 
 fn folder_id_on(conn: &Connection, path: &str) -> Result<i64> {
@@ -759,5 +1059,67 @@ mod tests {
         let sim = c.similar(a, 8).unwrap();
         assert_eq!(sim.len(), 1);
         assert_eq!((sim[0].0.id, sim[0].1), (b, 1));
+    }
+
+    #[test]
+    fn ai_analysis_people_and_search() {
+        let mut c = Catalog::open_in_memory().unwrap();
+        let ids: Vec<i64> = ["a", "b", "c"]
+            .iter()
+            .map(|n| c.upsert_scanned(&scanned(&format!("/p/{n}.jpg"), 1, "2024")).unwrap().id())
+            .collect();
+        assert_eq!(c.ai_pending().unwrap().len(), 3);
+        let unit = |i: usize| {
+            let mut v = vec![0.0f32; 8];
+            v[i] = 1.0;
+            v
+        };
+        let near = |i: usize| {
+            let mut v = unit(i);
+            v[7] = 0.1;
+            crate::ai::normalize(&mut v);
+            v
+        };
+        let face = |e: Vec<f32>| AnalyzedFace { rect: [0.1, 0.1, 0.2, 0.2], score: 0.9, embedding: e };
+        // a: Alice; b: Alice + Bob; c: Bob
+        let data = [
+            (ids[0], vec![face(unit(0))]),
+            (ids[1], vec![face(near(0)), face(unit(1))]),
+            (ids[2], vec![face(near(1))]),
+        ];
+        for (id, faces) in data {
+            c.store_analysis(&Analysis {
+                asset_id: id,
+                mtime: 1,
+                embedding: Some(unit(2)),
+                tags: vec![("beach".into(), 0.6)],
+                faces,
+            })
+            .unwrap();
+        }
+        assert!(c.ai_pending().unwrap().is_empty());
+        assert_eq!(c.cluster_faces(0.8).unwrap(), 4);
+        let people = c.persons().unwrap();
+        assert_eq!(people.len(), 2, "{people:?}");
+        assert!(people.iter().all(|p| p.photos == 2));
+        let alice = c.faces_of(ids[0]).unwrap()[0].person_id.unwrap();
+        c.name_person(alice, "Alice").unwrap();
+        let q = SearchQuery { person_id: Some(alice), ..Default::default() };
+        assert_eq!(c.search(&q).unwrap().iter().map(|a| a.id).collect::<Vec<_>>(), vec![ids[0], ids[1]]);
+        // Naming Bob "alice" merges the clusters.
+        let bob = c.faces_of(ids[2]).unwrap()[0].person_id.unwrap();
+        assert_eq!(c.name_person(bob, "alice").unwrap(), alice);
+        assert_eq!(c.persons().unwrap().len(), 1);
+        // Re-assign one face to a new name.
+        let f = c.faces_of(ids[2]).unwrap()[0].id;
+        c.set_face_name(f, "Bob").unwrap();
+        assert_eq!(c.face(f).unwrap().person_name.as_deref(), Some("Bob"));
+        assert_eq!(c.ai_tags(ids[0]).unwrap(), vec![("beach".to_string(), 0.6)]);
+        assert_eq!(c.embeddings().unwrap().len(), 3);
+        let n = c.ai_counts().unwrap();
+        assert_eq!((n.analyzed, n.total, n.faces), (3, 3, 4));
+        // Editing the file makes it pending again.
+        c.upsert_scanned(&scanned("/p/a.jpg", 2, "2024")).unwrap();
+        assert_eq!(c.ai_pending().unwrap().len(), 1);
     }
 }

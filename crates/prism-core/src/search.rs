@@ -15,6 +15,8 @@ pub struct SearchQuery {
     pub tagged: Option<bool>,
     pub keyword: Option<String>,
     pub collection_id: Option<i64>,
+    /// Photos containing this person (AI face recognition).
+    pub person_id: Option<i64>,
     /// Inclusive `YYYY-MM-DD` bounds on capture date.
     pub date_from: Option<String>,
     pub date_to: Option<String>,

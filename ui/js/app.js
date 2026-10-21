@@ -5,6 +5,7 @@ import { store, emit, on, toast } from "./state.js";
 import * as manage from "./manage.js";
 import * as view from "./view.js";
 import * as develop from "./develop.js";
+import * as ai from "./ai.js";
 
 const MODES = ["manage", "view", "develop", "edit"];
 
@@ -111,4 +112,5 @@ wireKeys();
 manage.init();
 view.init();
 develop.init();
+ai.init();
 emit("library-changed");

@@ -4,6 +4,7 @@
 //! subject/sky segmenter) plug in here without touching the pipeline.
 
 use super::buffer::{blur_plane, luma, rgb_to_hsl, smoothstep, Buf};
+use image::ImageEncoder;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -20,11 +21,55 @@ pub enum Mask {
     /// Heuristic sky detection (colour + brightness + connection to the top
     /// edge). `sensitivity` 0…100.
     Sky { sensitivity: f32 },
+    /// A precomputed (e.g. AI) mask over the whole uncropped photo, stored
+    /// as a base64 grayscale PNG. The pipeline runs it through the same lens
+    /// and geometry transforms as the image so it stays aligned.
+    Bitmap { label: String, width: u32, height: u32, data: String },
+}
+
+impl Mask {
+    pub fn from_gray(label: &str, img: &image::GrayImage) -> Mask {
+        use base64::Engine;
+        let mut png = Vec::new();
+        image::codecs::png::PngEncoder::new(&mut png)
+            .write_image(img.as_raw(), img.width(), img.height(), image::ExtendedColorType::L8)
+            .expect("in-memory PNG");
+        Mask::Bitmap {
+            label: label.to_string(),
+            width: img.width(),
+            height: img.height(),
+            data: base64::engine::general_purpose::STANDARD.encode(png),
+        }
+    }
+
+    /// The bitmap as a 0…1 plane, if this is a valid bitmap mask.
+    pub fn bitmap_plane(&self) -> Option<Buf> {
+        use base64::Engine;
+        let Mask::Bitmap { data, .. } = self else { return None };
+        let png = base64::engine::general_purpose::STANDARD.decode(data).ok()?;
+        let img = image::load_from_memory(&png).ok()?.to_luma8();
+        let (w, h) = (img.width() as usize, img.height() as usize);
+        let px = img.as_raw().iter().map(|&v| [v as f32 / 255.0; 3]).collect();
+        Some(Buf { w, h, px })
+    }
+}
+
+/// Bilinear resample of a 0…1 plane (channel 0 of `b`) to `w × h`.
+pub(crate) fn resample(b: &Buf, w: usize, h: usize) -> Vec<f32> {
+    let (sx, sy) = (b.w as f32 / w as f32, b.h as f32 / h as f32);
+    (0..w * h).map(|i| b.sample(((i % w) as f32 + 0.5) * sx - 0.5, ((i / w) as f32 + 0.5) * sy - 0.5)[0]).collect()
 }
 
 pub fn evaluate(mask: &Mask, img: &Buf) -> Vec<f32> {
     let (w, h) = (img.w, img.h);
+    if let Mask::Bitmap { .. } = mask {
+        return match mask.bitmap_plane() {
+            Some(plane) => resample(&plane, w, h),
+            None => vec![0.0; w * h],
+        };
+    }
     match *mask {
+        Mask::Bitmap { .. } => unreachable!(),
         Mask::Full => vec![1.0; w * h],
         Mask::Linear { x0, y0, x1, y1 } => {
             let (dx, dy) = ((x1 - x0) * w as f32, (y1 - y0) * h as f32);
@@ -59,6 +104,12 @@ pub fn luma_weight(range: [f32; 2], l: f32) -> f32 {
     let (lo, hi) = (range[0].min(range[1]), range[0].max(range[1]));
     let soft = 0.08;
     smoothstep(lo - soft, lo + soft, l) * (1.0 - smoothstep(hi - soft, hi + soft, l))
+}
+
+/// Heuristic sky mask (0…1) for an 8-bit display image.
+pub fn sky_from_rgb(img: &image::RgbImage, sensitivity: f32) -> Vec<f32> {
+    let px = img.pixels().map(|p| p.0.map(|v| v as f32 / 255.0)).collect();
+    sky(&Buf { w: img.width() as usize, h: img.height() as usize, px }, sensitivity)
 }
 
 /// Sky heuristic on display-space pixels:
@@ -157,6 +208,17 @@ mod tests {
         assert!(r[50 * 100 + 50] > 0.99 && r[5 * 100 + 5] < 0.01);
         let l = evaluate(&Mask::Linear { x0: 0.5, y0: 0.0, x1: 0.5, y1: 1.0 }, &img);
         assert!(l[0] > 0.99 && l[99 * 100] < 0.01 && l[50 * 100] > 0.3);
+    }
+
+    #[test]
+    fn bitmap_mask_roundtrip() {
+        let g = image::GrayImage::from_fn(40, 20, |x, _| image::Luma([if x < 20 { 255 } else { 0 }]));
+        let m = Mask::from_gray("subject", &g);
+        let json = serde_json::to_string(&m).unwrap();
+        assert!(json.contains("\"kind\":\"bitmap\""));
+        let back: Mask = serde_json::from_str(&json).unwrap();
+        let v = evaluate(&back, &Buf::new(80, 40));
+        assert!(v[10] > 0.99 && v[79] < 0.01);
     }
 
     #[test]

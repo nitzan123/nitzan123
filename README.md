@@ -66,6 +66,23 @@ saturation, temperature, tint and blur.
 - Quick looks: Brighten sky, Dramatic sky, Blur background, Spotlight,
   Warm foreground.
 
+**AI** (optional, runs on this computer; photos are never uploaded):
+- One-time download of four open models (about 131 MB, SHA-256 verified):
+  YuNet + SFace for faces (MIT / Apache-2.0), TinyCLIP for image–text
+  understanding (MIT) and U²-Netp for subject segmentation (Apache-2.0).
+  Inference is pure Rust (tract), so there is no native ML runtime to install.
+- **People**: faces are detected, embedded and grouped into people. Name a
+  person once and every photo of them is searchable; click a person in the
+  People panel to filter.
+- **Smart search** (✨): describe a photo in words ("dog on the beach",
+  "group photo in uniform") and get ranked matches.
+- **Suggested keywords** in Properties, from a 140-label photo vocabulary;
+  one click adds them as real keywords.
+- **Find similar** uses CLIP embeddings once photos are analysed (dHash
+  otherwise).
+- **AI masks** in Edit: Subject, Sky and Blur background. The mask is stored
+  with the edit and follows rotation, crop and lens correction.
+
 **Export**: full-size or resized JPEG with your develop settings applied,
 available from both Manage (batch export of the selection) and Develop.
 - **Text on photo**: optionally burn a caption into a corner of the exported
@@ -100,7 +117,7 @@ Requirements: Rust (stable) and the
 ```bash
 cargo run -p prism-studio --release                # start the app
 cargo run -p prism-studio --release -- ~/Pictures  # start and index a folder
-cargo test --workspace                             # 63 tests (unit + robustness)
+cargo test --workspace                             # 76 tests (unit + robustness)
 ```
 
 To build installers (`.msi`/`.exe`, `.dmg`, `.deb`/`.AppImage`):
@@ -119,7 +136,7 @@ cargo run --release --example develop_cli -- out/ photo1.NEF photo2.CR2
 
 ## Quality
 
-- **63 automated tests**, including an end-to-end robustness suite. It uses a
+- **76 automated tests**, including an end-to-end robustness suite. It uses a
   generated library of awkward files: Hebrew folder and file names, spaces,
   EXIF-rotated portraits, 16-bit TIFF, alpha PNG, 1×1 images, empty, truncated
   and fake files. It checks that everything indexes, thumbnails, decodes and
@@ -152,12 +169,13 @@ crates/prism-core   UI-agnostic engine (all logic, all tests)
   similarity.rs     dHash + Hamming distance
   xmp.rs            sidecar read/write
   develop/          settings model, render pipeline, masks, auto
-src-tauri           Tauri shell: commands, background indexer, prism:// image protocol
+  ai/               model download, faces (YuNet/SFace), CLIP + tokenizer, U²-Netp, keyword vocabulary
+src-tauri           Tauri shell: commands, background indexer and AI job, prism:// image protocol
 ui                  vanilla ES modules, no build step
 ```
 
 Render pipeline order (see `develop/pipeline.rs`):
-geometry → WB / exposure (linear) → tone (highlights, shadows, whites,
+lens correction → geometry → WB / exposure (linear) → tone (highlights, shadows, whites,
 blacks, contrast with roll-off) → clarity → display sRGB → tone curve →
 colour mixer, vibrance, saturation → split tone → local masks → vignette →
 noise reduction and sharpening.
@@ -167,13 +185,12 @@ noise reduction and sharpening.
 - RAWs the decoder can't read (e.g. CR3) are developed from their embedded
   JPEG. X-Trans demosaicing is simpler than Bayer's (fine detail is softer).
 - Lens matching needs the lens name in EXIF; some bodies (e.g. many Nikons)
-  don't record it, so use the manual sliders there. Full-resolution demosaic (AMaZE/RCD-class) is the top roadmap
-  item.
-- No lens-profile correction or chromatic-aberration removal yet.
-- The sky mask is a heuristic (colour, brightness and connection to the top
-  edge), not ML. The mask-provider interface (`develop/masks.rs`) is where
-  ONNX segmentation would plug in.
-- No face recognition or AI keywording yet.
+  don't record it, so use the manual sliders there.
+- AI models are small so they run on any CPU. The subject mask works at
+  320 px and is soft at fine edges (hair); in group photos, people far behind
+  the main subject may be partly treated as background. Keyword suggestions
+  are limited to the built-in vocabulary. Analysis takes about 0.3 s per
+  photo plus about 3 s per AI mask.
 - Exports are JPEG only. HEIC and CR3 full decode are not supported.
 
 See [docs/architecture.md](docs/architecture.md) for the roadmap.
@@ -184,3 +201,7 @@ The RAW sample files used in screenshots and testing come from
 [raw.pixls.us](https://raw.pixls.us) (CC0). Caption font: DejaVu Sans Bold
 (see `crates/prism-core/assets/fonts/DejaVu-LICENSE.txt`). Place names:
 © OpenStreetMap contributors, ODbL.
+Lens profiles: [lensfun](https://lensfun.github.io) (CC BY-SA 3.0),
+downloaded on request. AI models (downloaded on request, not bundled):
+YuNet and SFace from OpenCV Zoo (MIT, Apache-2.0), TinyCLIP (MIT, Microsoft),
+U²-Netp (Apache-2.0).

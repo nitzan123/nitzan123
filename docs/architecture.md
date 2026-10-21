@@ -36,10 +36,10 @@ Develop ─► develop_preview(id, settings, max) ─► cached linear source (L
 |---|---|---|
 | ✓ | Full-resolution demosaic (Malvar–He–Cutler) | done; a GPU path remains an option |
 | ✓ | Lens correction via lensfun DB | done (downloaded on request) |
-| 3 | ML masks (subject, sky, person) via ONNX Runtime | plugs into `masks::Mask`; ship open models (e.g. MODNet, SegFormer) |
-| 4 | Face detection/recognition + People view | cluster embeddings and auto-name by distance, as in the reference product's pipeline |
-| 5 | Embedding similarity search | replace dHash with CLIP embeddings + an ANN index |
-| 6 | AI keywording | open CLIP zero-shot or a tagging model |
+| ✓ | ML masks (subject, sky) | U²-Netp via tract, stored as `Mask::Bitmap` |
+| ✓ | Face detection/recognition + People view | YuNet + SFace, greedy clustering at cosine 0.40 |
+| ✓ | Embedding similarity + text search | TinyCLIP; brute-force cosine (ANN index when libraries exceed ~100k) |
+| ✓ | AI keywording | CLIP zero-shot over a fixed vocabulary |
 | 7 | Interactive crop handles, brush masks, heal/clone | Edit mode |
 | 8 | Presets (save/apply develop looks), batch rename/resize | |
 | 9 | Export: TIFF/PNG/WebP/AVIF, metadata embedding, watermark | |

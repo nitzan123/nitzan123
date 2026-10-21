@@ -36,6 +36,7 @@ pub fn render(src: &LinearImage, s: &DevelopSettings) -> Rgb32FImage {
         h: src.height() as usize,
         px: src.as_raw().chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect(),
     };
+    let bitmaps = align_bitmap_masks(&buf, s);
     let buf = crate::lens::apply(buf, &s.lens);
     let mut buf = geometry(buf, &s.geometry);
     linear_stage(&mut buf, s);
@@ -44,7 +45,7 @@ pub fn render(src: &LinearImage, s: &DevelopSettings) -> Rgb32FImage {
     curve(&mut buf, s);
     color(&mut buf, s);
     split_tone(&mut buf, s);
-    local(&mut buf, s);
+    local(&mut buf, s, &bitmaps);
     vignette(&mut buf, s);
     detail(&mut buf, s);
     let flat: Vec<f32> = buf.px.iter().flat_map(|p| p.iter().map(|v| v.clamp(0.0, 1.0))).collect();
@@ -292,9 +293,36 @@ fn split_tone(b: &mut Buf, s: &DevelopSettings) {
 
 // ------------------------------------------------------------------ 9 local
 
-fn local(b: &mut Buf, s: &DevelopSettings) {
-    for adj in s.local.iter().filter(|a| a.enabled) {
-        let mut mask = evaluate(&adj.mask, b);
+/// Bitmap masks cover the uncropped photo; run each through the same lens
+/// geometry and crop/rotate as the image (at reduced size) so it lines up
+/// with the rendered pixels.
+fn align_bitmap_masks(src: &Buf, s: &DevelopSettings) -> Vec<Option<Buf>> {
+    let mut lens_geometry = s.lens.clone();
+    lens_geometry.vignetting = 0.0;
+    lens_geometry.manual_vignetting = 0.0;
+    s.local
+        .iter()
+        .map(|adj| {
+            if !adj.enabled {
+                return None;
+            }
+            let plane = adj.mask.bitmap_plane()?;
+            // Same aspect as the source, long edge ≤ 1024.
+            let k = (1024.0 / src.w.max(src.h) as f32).min(1.0);
+            let (w, h) = (((src.w as f32 * k) as usize).max(1), ((src.h as f32 * k) as usize).max(1));
+            let px = super::masks::resample(&plane, w, h).into_iter().map(|v| [v; 3]).collect();
+            let m = crate::lens::apply(Buf { w, h, px }, &lens_geometry);
+            Some(geometry(m, &s.geometry))
+        })
+        .collect()
+}
+
+fn local(b: &mut Buf, s: &DevelopSettings, bitmaps: &[Option<Buf>]) {
+    for (adj, aligned) in s.local.iter().zip(bitmaps).filter(|(a, _)| a.enabled) {
+        let mut mask = match aligned {
+            Some(m) => super::masks::resample(m, b.w, b.h),
+            None => evaluate(&adj.mask, b),
+        };
         if adj.invert {
             mask.iter_mut().for_each(|m| *m = 1.0 - *m);
         }
@@ -521,6 +549,19 @@ mod tests {
             let out = render(&grey(w, h, 0.2), &s);
             assert!(out.width() >= 1 && out.height() >= 1);
         }
+    }
+
+    #[test]
+    fn bitmap_mask_follows_rotation() {
+        // Mask covers the left half of the source; after a 90° CW turn the
+        // masked half is at the top.
+        let g = image::GrayImage::from_fn(40, 20, |x, _| image::Luma([if x < 20 { 255 } else { 0 }]));
+        let mut s = DevelopSettings::default();
+        s.geometry.rotate90 = 1;
+        s.local.push(LocalAdjustment { mask: Mask::from_gray("subject", &g), exposure: 2.0, ..Default::default() });
+        let out = render(&grey(40, 20, 0.05), &s);
+        assert_eq!(out.dimensions(), (20, 40));
+        assert!(out.get_pixel(10, 5).0[0] > out.get_pixel(10, 35).0[0] + 0.2);
     }
 
     #[test]

@@ -11,6 +11,8 @@ export const store = {
   query: { sort: "name", descending: false },
   /** Human description of the current source (folder, collection…). */
   scope: "All photos",
+  /** Active smart (CLIP) search text, or null. */
+  smart: null,
   assets: [],
   selected: new Set(),
   /** Index into `assets` of the focused photo. */

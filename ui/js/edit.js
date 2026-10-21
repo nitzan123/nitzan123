@@ -2,7 +2,9 @@
 // whole image) + one-click looks built from them. Masks live inside the
 // develop settings, so everything stays non-destructive.
 
-import { el } from "./state.js";
+import { el, toast } from "./state.js";
+import { api } from "./api.js";
+import { aiReady, open as openAi } from "./ai.js";
 import { slider } from "./controls.js";
 
 const $ = (id) => document.getElementById(id);
@@ -19,7 +21,24 @@ const MASKS = {
   sky: () => ({ kind: "sky", sensitivity: 50 }),
   full: () => ({ kind: "full" }),
 };
-const KIND_NAMES = { radial: "Radial", linear: "Gradient", sky: "Sky (auto-detect)", full: "Whole image" };
+const KIND_NAMES = { radial: "Radial", linear: "Gradient", sky: "Sky (auto-detect)", full: "Whole image", bitmap: "AI mask" };
+
+/** Asks the backend for an AI mask of the current photo, then adds it. */
+async function addAi(ctx, kind, partial, name) {
+  if (!aiReady()) {
+    toast("AI masks need the AI models");
+    return openAi();
+  }
+  const id = ctx.dev.id;
+  toast(`Finding ${kind}…`);
+  try {
+    const mask = await api.aiMask(id, kind);
+    if (id !== ctx.dev.id) return;
+    add(ctx, { ...partial, mask }, name);
+  } catch (e) {
+    toast(String(e), true);
+  }
+}
 
 const LOOKS = [
   ["Brighten sky", { mask: MASKS.sky(), exposure: 0.4, saturation: 15 }],
@@ -59,6 +78,7 @@ export function render(ctx) {
       sky: () => [sl("Sensitivity", "mask.sensitivity", 0, 100, 1, 50),
         el("p", { class: "hint" }, "Heuristic detection (colour, brightness, connected to the top edge). Works best on clear or overcast skies.")],
       full: () => [],
+      bitmap: () => [el("p", { class: "hint" }, `AI-detected ${adj.mask.label}. Use Invert to adjust everything else.`)],
     }[adj.mask.kind]();
 
     const lumaToggle = el("label", { class: "check" },
@@ -103,6 +123,10 @@ export function render(ctx) {
       el("h3", {}, "Add local adjustment"),
       el("div", { class: "btn-row" },
         ...Object.keys(MASKS).map((k) => el("button", { class: "btn small", onclick: () => add(ctx, { mask: MASKS[k](), exposure: k === "linear" ? -0.5 : 0.3 }, KIND_NAMES[k]) }, KIND_NAMES[k]))),
+      el("div", { class: "btn-row" },
+        el("button", { class: "btn small", onclick: () => addAi(ctx, "subject", { exposure: 0.3 }, "Subject (AI)") }, "✨ Subject (AI)"),
+        el("button", { class: "btn small", onclick: () => addAi(ctx, "sky", { exposure: -0.3 }, "Sky (AI)") }, "✨ Sky (AI)"),
+        el("button", { class: "btn small", onclick: () => addAi(ctx, "subject", { invert: true, blur: 60, exposure: -0.15 }, "Blur background (AI)") }, "✨ Blur background")),
       el("h3", {}, "Quick looks"),
       el("div", { class: "btn-row" }, ...LOOKS.map(([name, p]) => el("button", { class: "btn small", onclick: () => add(ctx, structuredClone(p), name) }, name)))),
     el("div", { class: "panel" },

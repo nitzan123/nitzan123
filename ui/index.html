@@ -18,7 +18,9 @@
     </nav>
     <div class="topbar-right">
       <button id="help-btn" class="icon-btn" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">?</button>
+      <button id="smart-toggle" class="chip" title="Smart search: describe the photo (needs AI analysis)" aria-pressed="false">✨ Smart</button>
       <input id="quick-search" type="search" placeholder="Search name, caption, keyword…" aria-label="Quick search" />
+      <button id="ai-btn" class="btn small" title="AI features">AI</button>
       <button id="add-folder" class="btn primary">Add folder</button>
       <div id="progress" class="progress" hidden><div class="progress-bar"></div><span class="progress-text"></span></div>
     </div>
@@ -55,6 +57,10 @@
         <div class="panel">
           <h3>Collections <button id="new-collection" class="icon-btn" title="New collection">＋</button></h3>
           <ul id="collection-list" class="nav-list"></ul>
+        </div>
+        <div class="panel" id="people-panel" hidden>
+          <h3>People</h3>
+          <ul id="people-list" class="people-list"></ul>
         </div>
         <div class="panel">
           <h3>Keywords</h3>
@@ -201,6 +207,13 @@
         <dt>Double-click a slider label</dt><dd>Reset that slider</dd>
       </dl>
       <menu><button value="ok" class="btn primary">Close</button></menu>
+    </form>
+  </dialog>
+  <dialog id="ai-dialog" aria-labelledby="ai-title">
+    <form method="dialog">
+      <h3 id="ai-title">AI features</h3>
+      <div id="ai-body"></div>
+      <menu><button value="ok" class="btn">Close</button></menu>
     </form>
   </dialog>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>

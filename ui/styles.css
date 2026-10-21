@@ -223,3 +223,23 @@ dialog menu { display: flex; flex-direction: row-reverse; justify-content: flex-
   .toolbar label select { font-size: 13px; }
   #quick-search { width: 200px; }
 }
+
+/* ---------- AI */
+#smart-toggle[aria-pressed=true] { border-color: var(--accent); background: var(--sel); }
+#ai-btn.busy { border-color: var(--accent); animation: pulse 1.6s ease-in-out infinite; }
+@keyframes pulse { 50% { background: var(--sel); } }
+.progress.wide { width: 100%; }
+.ai-stats { display: grid; grid-template-columns: 120px 1fr; gap: 4px 10px; margin: 0 0 10px; }
+.ai-stats dt { color: var(--muted); }
+.ai-stats dd { margin: 0; }
+#ai-dialog { width: 460px; }
+.people-list { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.people-list li { cursor: pointer; text-align: center; font-size: 11px; border-radius: 6px; padding: 3px; }
+.people-list li:hover, .people-list li:focus-visible { background: var(--bg-3); }
+.people-list li.active { background: var(--sel); }
+.people-list img, .face-row img { width: 100%; aspect-ratio: 1; border-radius: 50%; object-fit: cover; display: block; }
+.people-list .pname { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
+.people-list .unnamed { color: var(--muted); font-style: italic; }
+.face-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin: 6px 0; }
+.face-row button { background: none; border: 0; padding: 0; cursor: pointer; color: inherit; font-size: 11px; text-align: center; }
+.chip.suggest { border-style: dashed; }

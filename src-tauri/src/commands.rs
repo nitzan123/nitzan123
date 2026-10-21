@@ -189,10 +189,29 @@ pub struct SimilarHit {
     distance: u32,
 }
 
+/// Visually similar photos: CLIP embeddings when the library has been
+/// analysed (finds similar scenes, not just copies), else perceptual hash.
 #[tauri::command]
 pub fn similar(state: State<'_, AppState>, id: i64, max_distance: Option<u32>) -> CmdResult<Vec<SimilarHit>> {
-    Ok(state
-        .catalog()
+    let cat = state.catalog();
+    let embeddings = cat.embeddings().map_err(s)?;
+    if let Some((_, target)) = embeddings.iter().find(|(i, _)| *i == id) {
+        let mut hits: Vec<(i64, f32)> = embeddings
+            .iter()
+            .filter(|(i, _)| *i != id)
+            .map(|(i, e)| (*i, prism_core::ai::cosine(target, e)))
+            .filter(|(_, sim)| *sim >= 0.85)
+            .collect();
+        hits.sort_by(|a, b| b.1.total_cmp(&a.1));
+        return hits
+            .into_iter()
+            .take(24)
+            .map(|(i, sim)| {
+                Ok(SimilarHit { asset: cat.asset(i).map_err(s)?, distance: ((1.0 - sim) * 100.0).round() as u32 })
+            })
+            .collect();
+    }
+    Ok(cat
         .similar(id, max_distance.unwrap_or(10))
         .map_err(s)?
         .into_iter()
@@ -523,6 +542,123 @@ pub async fn lens_profile(app: AppHandle, id: i64) -> CmdResult<LensMatch> {
         let profile = entry.profile(focal, e.f_number.unwrap_or(0.0), crop);
         let message = format!("{} @ {:.0} mm", profile.lens, focal);
         Ok(LensMatch { exif_lens: Some(lens_name), camera, profile: Some(profile), message })
+    })
+    .await
+    .map_err(s)?
+}
+
+// ----------------------------------------------------------------------- AI
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiStatus {
+    installed: bool,
+    download_bytes: u64,
+    running: bool,
+    counts: prism_core::catalog::AiCounts,
+}
+
+#[tauri::command]
+pub fn ai_status(state: State<'_, AppState>) -> CmdResult<AiStatus> {
+    Ok(AiStatus {
+        installed: state.ai.installed(),
+        download_bytes: prism_core::ai::total_download_size(),
+        running: state.ai_running.load(std::sync::atomic::Ordering::SeqCst),
+        counts: state.catalog().ai_counts().map_err(s)?,
+    })
+}
+
+/// Downloads the models (~130 MB). Emits `ai-download-progress` [done, total].
+#[tauri::command]
+pub async fn ai_download(app: AppHandle) -> CmdResult<()> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = app.state::<AppState>().ai.dir().to_path_buf();
+        prism_core::ai::download(&dir, |d, t| {
+            let _ = app.emit("ai-download-progress", [d, t]);
+        })
+        .map_err(s)
+    })
+    .await
+    .map_err(s)?
+}
+
+#[tauri::command]
+pub fn ai_analyze(app: AppHandle) -> CmdResult<()> {
+    crate::ai_job::spawn(app)
+}
+
+#[tauri::command]
+pub fn ai_cancel(state: State<'_, AppState>) {
+    state.ai_cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiDetails {
+    tags: Vec<(String, f32)>,
+    faces: Vec<prism_core::catalog::FaceRow>,
+}
+
+#[tauri::command]
+pub fn ai_details(state: State<'_, AppState>, id: i64) -> CmdResult<AiDetails> {
+    let cat = state.catalog();
+    Ok(AiDetails { tags: cat.ai_tags(id).map_err(s)?, faces: cat.faces_of(id).map_err(s)? })
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScoredAsset {
+    asset: Asset,
+    score: f32,
+}
+
+/// Natural-language search over CLIP embeddings ("dog on the beach").
+#[tauri::command]
+pub async fn smart_search(app: AppHandle, text: String, limit: Option<usize>) -> CmdResult<Vec<ScoredAsset>> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let q = state.ai.clip().map_err(s)?.embed_text(&text).map_err(s)?;
+        let embeddings = state.catalog().embeddings().map_err(s)?;
+        let mut scored: Vec<(i64, f32)> =
+            embeddings.iter().map(|(id, e)| (*id, prism_core::ai::cosine(&q, e))).collect();
+        scored.sort_by(|a, b| b.1.total_cmp(&a.1));
+        // CLIP scores are relative: keep the clear matches near the top.
+        let best = scored.first().map_or(0.0, |x| x.1);
+        let cat = state.catalog();
+        scored
+            .into_iter()
+            .take_while(|(_, sc)| *sc >= best - 0.06 && *sc > 0.15)
+            .take(limit.unwrap_or(200))
+            .map(|(id, score)| Ok(ScoredAsset { asset: cat.asset(id).map_err(s)?, score }))
+            .collect()
+    })
+    .await
+    .map_err(s)?
+}
+
+#[tauri::command]
+pub fn persons(state: State<'_, AppState>) -> CmdResult<Vec<prism_core::catalog::PersonRow>> {
+    state.catalog().persons().map_err(s)
+}
+
+#[tauri::command]
+pub fn name_person(state: State<'_, AppState>, person_id: i64, name: String) -> CmdResult<i64> {
+    state.catalog().name_person(person_id, &name).map_err(s)
+}
+
+#[tauri::command]
+pub fn set_face_name(state: State<'_, AppState>, face_id: i64, name: String) -> CmdResult<()> {
+    state.catalog().set_face_name(face_id, &name).map_err(s)
+}
+
+/// AI mask ("subject" or "sky") for a photo, ready to put in a local adjustment.
+#[tauri::command]
+pub async fn ai_mask(app: AppHandle, id: i64, kind: String) -> CmdResult<prism_core::develop::masks::Mask> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let path = state.catalog().asset(id).map_err(s)?.path;
+        let img = prism_core::imaging::load_display(Path::new(&path), 1024).map_err(s)?;
+        prism_core::ai::mask(&state.ai, &img, &kind).map_err(s)
     })
     .await
     .map_err(s)?

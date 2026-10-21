@@ -2,6 +2,7 @@
 //! and the non-destructive develop engine. UI-agnostic; the Tauri shell in
 //! `src-tauri` is a thin layer over this crate.
 
+pub mod ai;
 pub mod catalog;
 pub mod demosaic;
 pub mod develop;

@@ -4,6 +4,9 @@
 import { api, urls } from "./api.js";
 import { store, emit, on, toast, promptText, el, fmt, LABELS } from "./state.js";
 import { openExportDialog } from "./export.js";
+import { aiAnalyzed, open as openAi } from "./ai.js";
+
+let smartMode = false;
 
 const $ = (id) => document.getElementById(id);
 const META_H = 34;
@@ -18,7 +21,9 @@ let anchor = -1; // shift-click range anchor
 export async function reload({ keepFocus = true } = {}) {
   const focusedId = keepFocus ? store.current?.id : null;
   try {
-    store.assets = await api.search(store.query);
+    store.assets = store.smart
+      ? (await api.smartSearch(store.smart, 300)).map((r) => r.asset)
+      : await api.search(store.query);
   } catch (e) {
     toast(String(e), true);
     return;
@@ -43,6 +48,7 @@ function hasFilters() {
 }
 
 function setScope(scope, patch) {
+  store.smart = null;
   const { sort, descending, text } = store.query;
   store.query = { sort, descending, text, ...patch };
   store.scope = scope;
@@ -61,9 +67,34 @@ function patchQuery(patch) {
 // ---------------------------------------------------------------- sidebar
 
 export async function refreshSidebar() {
-  const [folders, collections, keywords, saved] = await Promise.all([
-    api.folders(), api.collections(), api.keywords(), api.savedSearches(),
-  ]).catch((e) => (toast(String(e), true), [[], [], [], []]));
+  const [folders, collections, keywords, saved, people] = await Promise.all([
+    api.folders(), api.collections(), api.keywords(), api.savedSearches(), api.persons().catch(() => []),
+  ]).catch((e) => (toast(String(e), true), [[], [], [], [], []]));
+
+  $("people-panel").hidden = people.length === 0;
+  $("people-list").replaceChildren(...people.map((p) => {
+    const label = p.name || "Unnamed";
+    const open = () => setScope(`Person · ${label}`, { personId: p.id });
+    const rename = async () => {
+      const name = await promptText("Who is this?", p.name || "");
+      if (!name) return;
+      try {
+        const id = await api.namePerson(p.id, name);
+        if (store.query.personId === p.id) store.query.personId = id;
+      } catch (e) {
+        toast(String(e), true);
+      }
+      refreshSidebar();
+      renderProps();
+    };
+    return el("li", {
+      class: store.query.personId === p.id ? "active" : "", tabindex: 0, role: "button",
+      title: `${label} · ${p.photos} photo${p.photos === 1 ? "" : "s"} — double-click to name`,
+      onclick: open, ondblclick: rename,
+      onkeydown: (e) => (e.key === "Enter" ? open() : e.key === "F2" && rename()),
+    }, el("img", { src: urls.face(p.coverFace), alt: "", loading: "lazy" }),
+      el("span", { class: "pname" + (p.name ? "" : " unnamed") }, `${label} (${p.photos})`));
+  }));
 
   const q = store.query;
   const item = (label, count, active, onclick, extra, title = label) =>
@@ -346,6 +377,34 @@ async function renderProps() {
     ["Path", asset.path],
   ].filter(([, v]) => v);
 
+  // AI: suggested keywords and recognised people.
+  const aiBox = el("div", {});
+  api.aiDetails(asset.id).then((ai) => {
+    if (token !== propsToken) return;
+    const have = new Set(det.keywords.map((k) => k.toLowerCase()));
+    const sugg = ai.tags.filter(([t]) => !have.has(t.toLowerCase()));
+    const parts = [];
+    if (sugg.length) {
+      parts.push(el("div", { class: "kw-list", title: "AI suggestions — click to add" },
+        ...sugg.map(([t, p]) => el("button", { class: "chip suggest", onclick: async () => {
+          await api.addKeyword(ids(), t).catch((e) => toast(String(e), true));
+          refreshSidebar();
+          renderProps();
+        } }, `+ ${t} ${Math.round(p * 100)}%`))));
+    }
+    if (ai.faces.length) {
+      parts.push(el("h3", {}, "People"), el("div", { class: "face-row" },
+        ...ai.faces.map((f) => el("button", { title: "Click to name", onclick: async () => {
+          const name = await promptText("Who is this?", f.personName || "");
+          if (!name) return;
+          await api.setFaceName(f.id, name).catch((e) => toast(String(e), true));
+          refreshSidebar();
+          renderProps();
+        } }, el("img", { src: urls.face(f.id), alt: "" }), f.personName || "Unnamed"))));
+    }
+    aiBox.replaceChildren(...parts);
+  }).catch(() => {});
+
   const similar = el("div", { class: "similar" });
   const simBtn = el("button", { class: "btn small", onclick: async () => {
     const hits = await api.similar(asset.id, 12);
@@ -360,6 +419,7 @@ async function renderProps() {
     stars, labels, tagged,
     el("h3", {}, "Caption"), caption,
     el("h3", {}, "Keywords"), kwList, kwInput,
+    aiBox,
     el("datalist", { id: "kw-suggest" }, ...allKw.map((k) => el("option", { value: k }))),
     el("div", { class: "btn-row" }, colSelect),
     el("dl", {}, ...exif.flatMap(([k, v]) => [el("dt", {}, k), el("dd", {}, String(v))])),
@@ -432,7 +492,29 @@ export function init() {
     refreshSidebar();
     reload();
   });
-  on("quick-search", (text) => patchQuery({ text: text || undefined }));
+  on("quick-search", (text) => {
+    if (smartMode && text.trim()) {
+      store.smart = text.trim();
+      store.scope = `Smart search · “${store.smart}”`;
+      return reload({ keepFocus: false });
+    }
+    if (store.smart) {
+      store.smart = null;
+      store.scope = "All photos";
+    }
+    patchQuery({ text: text || undefined });
+  });
+  $("smart-toggle").onclick = () => {
+    if (!aiAnalyzed()) {
+      toast("Smart search needs the AI models and an analysed library");
+      return openAi();
+    }
+    smartMode = !smartMode;
+    $("smart-toggle").setAttribute("aria-pressed", smartMode);
+    $("quick-search").placeholder = smartMode ? "Describe the photo… e.g. “sunset over the sea”" : "Search name, caption, keyword…";
+    const q = $("quick-search").value;
+    if (q) emit("quick-search", q);
+  };
   on("set-rating", ({ ids, rating }) => updateAssets(ids, () => api.setRating(ids, rating), { rating }));
   on("set-label", ({ ids, label }) => updateAssets(ids, () => api.setColorLabel(ids, label), { colorLabel: label }));
   on("set-tagged", ({ ids, tagged }) => updateAssets(ids, () => api.setTagged(ids, tagged), { tagged }));
