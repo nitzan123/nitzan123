@@ -29,6 +29,7 @@ pub fn apply_preset(base: &DevelopSettings, preset: &DevelopSettings) -> Develop
         lens: base.lens.clone(),
         local: base.local.clone(),
         spots: base.spots.clone(),
+        text: base.text.clone(),
         ..preset.clone()
     }
 }
@@ -208,7 +209,7 @@ fn stem(file_name: &str) -> &str {
 
 /// Unix seconds → `"YYYY-MM-DD HH:MM:SS"` (UTC), via Howard Hinnant's
 /// days-to-civil algorithm.
-fn file_date(secs: i64) -> String {
+pub fn file_date(secs: i64) -> String {
     let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
     let z = days + 719_468;
     let era = z.div_euclid(146_097);
@@ -452,6 +453,8 @@ pub(crate) mod tests_support {
             caption: None,
             developed: false,
             gps: None,
+            has_text: false,
+            needs_place: false,
         }
     }
 }
@@ -487,6 +490,8 @@ mod tests {
             caption: None,
             developed: false,
             gps: None,
+            has_text: false,
+            needs_place: false,
         }
     }
 

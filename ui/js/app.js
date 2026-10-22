@@ -7,6 +7,7 @@ import * as view from "./view.js";
 import * as develop from "./develop.js";
 import * as ai from "./ai.js";
 import * as workflow from "./workflow.js";
+import * as text from "./text.js";
 
 const MODES = ["manage", "view", "develop", "edit"];
 
@@ -122,4 +123,5 @@ view.init();
 develop.init();
 ai.init();
 workflow.init();
+text.init();
 emit("library-changed");

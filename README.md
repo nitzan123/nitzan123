@@ -127,20 +127,24 @@ tokens as rename). Available from Manage (batch) and Develop.
   copyright), readable by Lightroom, Photos, Google Photos, Flickr and
   others. Options: leave metadata out, drop just the location (for public
   sharing), and add a copyright line.
-- **Text on photo**: optionally burn a caption into a corner of the exported
-  copies, with a live preview in the dialog. It can include:
-  - the capture date, in one of four formats;
-  - a **place name from the photo's GPS** (e.g. "Jerusalem, Israel");
-  - your own text (e.g. a copyright line).
+- Text on photos is part of each photo's edit (see **Text on photos** below),
+  so exports show it exactly as in the app.
 
-  Place names come from OpenStreetMap Nominatim and can be in English, Hebrew
-  or local names. Lookups respect Nominatim's rate limit (1/s) and are cached
-  in the catalog per ~100 m. The dialog states that coordinates are sent to
-  openstreetmap.org. Without internet the coordinates are written instead.
-  Photos without GPS simply skip the place line. Right-to-left text such as
-  Hebrew renders correctly. Originals are never changed.
-
-  ![Export with caption](docs/screenshots/export-caption.jpg)
+**Text on photos** ("Vicuña, Chinchero, 01.10.2026"):
+- Select photos → **📝 Date & place…** → one click adds a line of text to all
+  of them: what/where (typed by you), the town from the photo's GPS
+  (OpenStreetMap, e.g. "Distrito de Cusco" → "Cusco") and the date in the
+  format you choose (default `23.09.2026`). Italic, bottom left or centre,
+  colour picked automatically (or black/white); wraps at commas on narrow
+  photos.
+- The photo's own data comes first: camera date and GPS. Without them, the
+  date is taken from the file name (WhatsApp `2026-10-20 at 21.32.51`, phone
+  `IMG_20261020_…`), optionally from the file date.
+- Photos still missing a place get a red **📍 place?** badge and a
+  "missing place" filter; type the place in the right panel (works for many
+  selected photos at once). Text you typed is never overwritten by a later
+  run. "Rename … everywhere" fixes a place on all photos (e.g. Lince → Lima).
+- Fine-tune a single photo in Develop → Text on photo.
 
 ## File formats
 

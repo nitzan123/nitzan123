@@ -29,6 +29,7 @@ export const applyLook = (base, look) => ({
   lens: base.lens,
   local: base.local,
   spots: base.spots,
+  text: base.text,
 });
 
 async function applyPresetDialog() {

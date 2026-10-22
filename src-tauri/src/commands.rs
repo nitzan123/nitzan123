@@ -10,9 +10,11 @@ use prism_core::develop::{
     render_to_rgb8,
 };
 use prism_core::embed::{encode_with_meta, ExportMeta};
-use prism_core::geocode::{cache_key, format_coords};
+use prism_core::geocode::cache_key;
+use prism_core::geocode::PlaceDetail;
 use prism_core::metadata::read_exif;
-use prism_core::overlay::{caption_lines, draw_caption, Caption};
+use prism_core::overlay::{format_date, DateFormat, TextOverlay};
+use prism_core::workflow::file_date;
 use prism_core::workflow::{
     apply_preset, builtin_presets, execute_renames, look_of, plan_renames, unique_path, ExportFormat, NameTemplate,
     Preset, RenamePlan,
@@ -325,76 +327,171 @@ pub async fn develop_preview(app: AppHandle, id: i64, settings: DevelopSettings,
     .map_err(s)?
 }
 
-/// Why a caption came out different from what was asked for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CaptionIssue {
-    NoGps,
-    LookupFailed,
+// --------------------------------------------------------- text on photos
+
+/// How to fill in the text of the photos in a batch.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct TextApply {
+    /// Position, size, colour and font for every photo in the batch.
+    style: TextOverlay,
+    date: bool,
+    date_format: DateFormat,
+    place: bool,
+    place_language: String,
+    place_detail: PlaceDetail,
+    /// Use the file's modified date when a photo has no capture date.
+    use_file_date: bool,
 }
 
-/// Place line for a caption: catalog cache → OpenStreetMap → coordinates.
-fn resolve_place(state: &AppState, gps: Option<[f64; 2]>, language: &str) -> (Option<String>, Option<CaptionIssue>) {
-    let Some([lat, lon]) = gps else { return (None, Some(CaptionIssue::NoGps)) };
-    let key = format!("{}|{language}", cache_key(lat, lon));
-    if let Ok(Some(cached)) = state.catalog().place(&key) {
-        return (Some(cached.unwrap_or_else(|| format_coords(lat, lon))), None);
-    }
-    match state.geocoder.reverse(lat, lon, language) {
-        Ok(place) => {
-            let _ = state.catalog().set_place(&key, place.as_deref());
-            (Some(place.unwrap_or_else(|| format_coords(lat, lon))), None)
+impl Default for TextApply {
+    fn default() -> Self {
+        Self {
+            style: TextOverlay::default(),
+            date: true,
+            date_format: DateFormat::Dotted,
+            place: true,
+            place_language: String::new(),
+            place_detail: PlaceDetail::City,
+            use_file_date: false,
         }
-        Err(_) => (Some(format_coords(lat, lon)), Some(CaptionIssue::LookupFailed)),
     }
 }
 
-/// Burns the caption into `img`. Returns what (if anything) was missing.
-fn apply_caption(state: &AppState, asset: &Asset, img: &mut image::RgbImage, c: &Caption) -> Option<CaptionIssue> {
-    let (place, issue) = if c.location {
-        resolve_place(state, read_exif(Path::new(&asset.path)).gps, &c.place_language)
-    } else {
-        (None, None)
-    };
-    draw_caption(img, &caption_lines(c, asset.taken_at.as_deref(), place.as_deref()), c);
-    issue
-}
-
-#[derive(Serialize)]
+#[derive(Serialize, Default)]
 #[serde(rename_all = "camelCase")]
-pub struct CaptionPreview {
-    data_url: String,
-    note: Option<String>,
+pub struct TextApplyResult {
+    applied: usize,
+    /// Photos whose place is still empty (no GPS, or lookup failed).
+    need_place: usize,
+    no_date: usize,
+    /// The place lookup failed for some photos (offline?).
+    lookup_failed: bool,
 }
 
-/// The current photo with its develop settings and the caption, small.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TextProgress {
+    done: usize,
+    total: usize,
+}
+
+/// Town for coordinates: catalog cache, then OpenStreetMap. `Err` when the
+/// lookup failed (offline); `Ok(None)` when there is no town there.
+fn town(state: &AppState, [lat, lon]: [f64; 2], language: &str, detail: PlaceDetail) -> Result<Option<String>, ()> {
+    let key = format!("{}|{language}|{detail:?}", cache_key(lat, lon));
+    if let Ok(Some(cached)) = state.catalog().place(&key) {
+        return Ok(cached);
+    }
+    let place = state.geocoder.lookup(lat, lon, language, detail).map_err(|_| ())?;
+    let _ = state.catalog().set_place(&key, place.as_deref());
+    Ok(place)
+}
+
+/// Adds or refreshes the text (subject, place, date) on photos. Data from
+/// the photo comes first (capture date, GPS → town); anything the user
+/// typed before (subject, a corrected place) is kept. Photos left without
+/// a place are flagged in the library so it can be typed in.
 #[tauri::command]
-pub async fn caption_preview(app: AppHandle, id: i64, caption: Caption) -> CmdResult<CaptionPreview> {
+pub async fn text_apply(app: AppHandle, ids: Vec<i64>, options: TextApply) -> CmdResult<TextApplyResult> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
-        let (asset, settings) = {
-            let cat = state.catalog();
-            (cat.asset(id).map_err(s)?, cat.develop(id).map_err(s)?.unwrap_or_default())
-        };
-        let src = state.source(id, Path::new(&asset.path)).map_err(s)?;
-        let mut img = render_to_rgb8(&src, &settings);
-        if img.width().max(img.height()) > 900 {
-            img = image::imageops::thumbnail(&img, 900, 900 * img.height() / img.width().max(1));
+        let mut res = TextApplyResult::default();
+        let total = ids.len();
+        for (i, &id) in ids.iter().enumerate() {
+            let (asset, mut settings) = {
+                let cat = state.catalog();
+                (cat.asset(id).map_err(s)?, cat.develop(id).map_err(s)?.unwrap_or_default())
+            };
+            let old = settings.text.take().unwrap_or_default();
+            let mut t = TextOverlay { subject: old.subject.clone(), ..options.style.clone() };
+            t.date = if options.date {
+                let file_date = || options.use_file_date.then(|| file_date(asset.mtime));
+                asset
+                    .taken_at
+                    .clone()
+                    .or_else(file_date)
+                    .and_then(|d| format_date(&d, options.date_format))
+                    .unwrap_or(old.date.clone())
+            } else {
+                String::new()
+            };
+            t.place = if !options.place {
+                String::new()
+            } else if !old.place.trim().is_empty() {
+                old.place.clone() // typed or corrected by the user
+            } else {
+                match asset.gps.map(|g| town(&state, g, &options.place_language, options.place_detail)) {
+                    Some(Ok(Some(p))) => p,
+                    Some(Err(())) => {
+                        res.lookup_failed = true;
+                        String::new()
+                    }
+                    _ => String::new(),
+                }
+            };
+            res.need_place += (options.place && t.place.is_empty()) as usize;
+            res.no_date += (options.date && t.date.is_empty()) as usize;
+            settings.text = Some(t);
+            {
+                let cat = state.catalog();
+                cat.set_develop(id, Some(&settings)).map_err(s)?;
+                sync_sidecars(&cat, &[id]);
+            }
+            res.applied += 1;
+            let _ = app.emit("text-progress", TextProgress { done: i + 1, total });
         }
-        let note = match apply_caption(&state, &asset, &mut img, &caption) {
-            Some(CaptionIssue::NoGps) => Some("This photo has no GPS location.".into()),
-            Some(CaptionIssue::LookupFailed) => Some("Place lookup failed (offline?) — coordinates shown.".into()),
-            None => None,
-        };
-        Ok(CaptionPreview {
-            data_url: format!(
-                "data:image/jpeg;base64,{}",
-                base64::engine::general_purpose::STANDARD.encode(encode_jpeg(&img, 85)?)
-            ),
-            note,
-        })
+        Ok(res)
     })
     .await
     .map_err(s)?
+}
+
+/// Sets the subject and/or place on several photos at once (fields left
+/// `None` are untouched). Photos without text get it with default style.
+#[tauri::command]
+pub fn text_edit(
+    state: State<'_, AppState>,
+    ids: Vec<i64>,
+    subject: Option<String>,
+    place: Option<String>,
+) -> CmdResult<()> {
+    let cat = state.catalog();
+    for &id in &ids {
+        let mut settings = cat.develop(id).map_err(s)?.unwrap_or_default();
+        let t = settings.text.get_or_insert_with(TextOverlay::default);
+        if let Some(v) = &subject {
+            t.subject = v.trim().to_string();
+        }
+        if let Some(v) = &place {
+            t.place = v.trim().to_string();
+        }
+        cat.set_develop(id, Some(&settings)).map_err(s)?;
+    }
+    sync_sidecars(&cat, &ids);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn text_remove(state: State<'_, AppState>, ids: Vec<i64>) -> CmdResult<()> {
+    let cat = state.catalog();
+    for &id in &ids {
+        if let Some(mut settings) = cat.develop(id).map_err(s)? {
+            settings.text = None;
+            cat.set_develop(id, Some(&settings)).map_err(s)?;
+        }
+    }
+    sync_sidecars(&cat, &ids);
+    Ok(())
+}
+
+/// Renames a place on every photo that has it ("Lince" → "Lima").
+#[tauri::command]
+pub fn replace_place(state: State<'_, AppState>, old: String, new: String) -> CmdResult<Vec<i64>> {
+    let cat = state.catalog();
+    let ids = cat.replace_place(&old, &new).map_err(s)?;
+    sync_sidecars(&cat, &ids);
+    Ok(ids)
 }
 
 #[derive(Serialize)]
@@ -421,7 +518,6 @@ pub struct ExportOptions {
     quality: u8,
     /// Long edge in pixels; 0 = full size.
     max_dim: u32,
-    caption: Option<Caption>,
     /// File-name template (see `workflow::NameTemplate`); empty = original names.
     name_template: Option<String>,
     /// Embed EXIF/XMP (camera, date, keywords, caption, rating).
@@ -438,7 +534,6 @@ impl Default for ExportOptions {
             format: ExportFormat::Jpeg,
             quality: 92,
             max_dim: 0,
-            caption: None,
             name_template: None,
             metadata: true,
             include_gps: true,
@@ -447,11 +542,11 @@ impl Default for ExportOptions {
     }
 }
 
-/// Renders each asset at full (or `max_dim`) resolution to `dir`,
-/// optionally burning in a caption.
+/// Renders each asset at full (or `max_dim`) resolution to `dir`, with its
+/// develop settings (including any text on the photo).
 #[tauri::command]
 pub async fn export(app: AppHandle, ids: Vec<i64>, dir: String, options: ExportOptions) -> CmdResult<ExportResult> {
-    let ExportOptions { format, quality, max_dim, caption, name_template, metadata, include_gps, copyright } = options;
+    let ExportOptions { format, quality, max_dim, name_template, metadata, include_gps, copyright } = options;
     let template = match name_template.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
         Some(t) => Some(NameTemplate::parse(t).map_err(s)?),
         None => None,
@@ -461,7 +556,7 @@ pub async fn export(app: AppHandle, ids: Vec<i64>, dir: String, options: ExportO
         let dir = PathBuf::from(dir);
         std::fs::create_dir_all(&dir).map_err(s)?;
         let mut res = ExportResult { written: Vec::new(), failed: Vec::new(), notes: Vec::new() };
-        let (mut no_gps, mut lookup_failed) = (0, 0);
+        let mut no_place = 0;
         let total = ids.len();
         for (i, id) in ids.into_iter().enumerate() {
             let mut job = || -> Result<PathBuf, String> {
@@ -471,14 +566,8 @@ pub async fn export(app: AppHandle, ids: Vec<i64>, dir: String, options: ExportO
                     (cat.asset(id).map_err(s)?, cat.develop(id).map_err(s)?.unwrap_or_default(), kw)
                 };
                 let src = prism_core::imaging::load_linear(Path::new(&asset.path), max_dim).map_err(s)?;
-                let mut img = render_to_rgb8(&src, &settings);
-                if let Some(c) = &caption {
-                    match apply_caption(&state, &asset, &mut img, c) {
-                        Some(CaptionIssue::NoGps) => no_gps += 1,
-                        Some(CaptionIssue::LookupFailed) => lookup_failed += 1,
-                        None => {}
-                    }
-                }
+                let img = render_to_rgb8(&src, &settings);
+                no_place += asset.needs_place as usize;
                 let stem = match &template {
                     Some(t) => t.render(&asset, i + 1),
                     None => Path::new(&asset.file_name).file_stem().unwrap_or_default().to_string_lossy().to_string(),
@@ -499,11 +588,8 @@ pub async fn export(app: AppHandle, ids: Vec<i64>, dir: String, options: ExportO
             }
             let _ = app.emit("export-progress", ExportProgress { done: i + 1, total });
         }
-        if no_gps > 0 {
-            res.notes.push(format!("{no_gps} photo(s) have no GPS location, so no place was added"));
-        }
-        if lookup_failed > 0 {
-            res.notes.push(format!("place lookup failed for {lookup_failed} photo(s); coordinates were used instead"));
+        if no_place > 0 {
+            res.notes.push(format!("{no_place} photo(s) were exported with text but without a place"));
         }
         Ok(res)
     })

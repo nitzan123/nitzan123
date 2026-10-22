@@ -142,11 +142,17 @@ pub struct Asset {
     pub developed: bool,
     /// `[latitude, longitude]` in degrees, from EXIF.
     pub gps: Option<[f64; 2]>,
+    /// Has text on the photo (date, place, …) in its develop settings.
+    pub has_text: bool,
+    /// Has text whose place is still empty (no GPS / lookup failed).
+    pub needs_place: bool,
 }
 
 const ASSET_COLUMNS: &str = "a.id, a.path, f.path, a.file_name, a.ext, a.size, a.mtime, a.width, a.height, \
     a.taken_at, a.camera_make, a.camera_model, a.lens, a.iso, a.f_number, a.exposure_time, a.focal_length, \
-    a.orientation, a.rating, a.color_label, a.tagged, a.caption, a.develop IS NOT NULL, a.gps_lat, a.gps_lon";
+    a.orientation, a.rating, a.color_label, a.tagged, a.caption, a.develop IS NOT NULL, a.gps_lat, a.gps_lon, \
+    json_extract(a.develop, '$.text') IS NOT NULL, \
+    json_extract(a.develop, '$.text') IS NOT NULL AND trim(coalesce(json_extract(a.develop, '$.text.place'), '')) = ''";
 
 fn asset_from_row(r: &Row<'_>) -> rusqlite::Result<Asset> {
     Ok(Asset {
@@ -177,6 +183,8 @@ fn asset_from_row(r: &Row<'_>) -> rusqlite::Result<Asset> {
             (Some(lat), Some(lon)) => Some([lat, lon]),
             _ => None,
         },
+        has_text: r.get(25)?,
+        needs_place: r.get(26)?,
     })
 }
 
@@ -469,6 +477,15 @@ impl Catalog {
         if let Some(g) = q.has_gps {
             sql += if g { " AND a.gps_lat IS NOT NULL" } else { " AND a.gps_lat IS NULL" };
         }
+        if let Some(n) = q.needs_place {
+            sql += if n {
+                " AND json_extract(a.develop, '$.text') IS NOT NULL \
+                 AND trim(coalesce(json_extract(a.develop, '$.text.place'), '')) = ''"
+            } else {
+                " AND NOT (json_extract(a.develop, '$.text') IS NOT NULL \
+                 AND trim(coalesce(json_extract(a.develop, '$.text.place'), '')) = '')"
+            };
+        }
         if let Some(d) = q.dated {
             sql += if d { " AND a.taken_at IS NOT NULL" } else { " AND a.taken_at IS NULL" };
         }
@@ -755,6 +772,26 @@ impl Catalog {
         };
         self.conn.execute("UPDATE assets SET develop = ?2 WHERE id = ?1", params![id, json])?;
         Ok(())
+    }
+
+    /// Renames a place in the text of every photo that uses it (e.g. the
+    /// district "Lince" → "Lima"). Returns the ids that changed.
+    pub fn replace_place(&self, old: &str, new: &str) -> Result<Vec<i64>> {
+        let rows: Vec<(i64, String)> = self
+            .conn
+            .prepare("SELECT id, develop FROM assets WHERE json_extract(develop, '$.text.place') = ?1")?
+            .query_map([old], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<rusqlite::Result<_>>()?;
+        let mut changed = Vec::new();
+        for (id, json) in rows {
+            let mut s: DevelopSettings = serde_json::from_str(&json)?;
+            if let Some(t) = s.text.as_mut() {
+                t.place = new.trim().to_string();
+                self.set_develop(id, Some(&s))?;
+                changed.push(id);
+            }
+        }
+        Ok(changed)
     }
 
     // ----------------------------------------------------------------- places
@@ -1060,6 +1097,17 @@ fn migrate(conn: &Connection) -> Result<()> {
         )?;
     }
     conn.execute_batch("CREATE INDEX IF NOT EXISTS assets_gps ON assets(gps_lat) WHERE gps_lat IS NOT NULL;")?;
+    // Photos indexed without a date may carry one in their file name
+    // (WhatsApp and phone cameras); cheap, so check on every start.
+    let undated: Vec<(i64, String)> = conn
+        .prepare("SELECT id, file_name FROM assets WHERE taken_at IS NULL")?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    for (id, name) in undated {
+        if let Some(d) = crate::metadata::date_from_filename(&name) {
+            conn.execute("UPDATE assets SET taken_at = ?2 WHERE id = ?1", params![id, d])?;
+        }
+    }
     // Catalogs from before library roots were recorded: the top-most
     // folders that hold photos become the roots.
     let roots: i64 = conn.query_row("SELECT COUNT(*) FROM roots", [], |r| r.get(0))?;
@@ -1383,6 +1431,22 @@ mod tests {
         assert!(c.save_preset("  ", &look).is_err());
         c.delete_preset(pid).unwrap();
         assert!(c.presets().unwrap().is_empty());
+
+        let with_text = |place: &str| DevelopSettings {
+            text: Some(crate::overlay::TextOverlay {
+                place: place.into(),
+                date: "01.10.2026".into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        c.set_develop(a, Some(&with_text("Lince"))).unwrap();
+        c.set_develop(b, Some(&with_text(""))).unwrap();
+        let needs = c.search(&SearchQuery { needs_place: Some(true), ..Default::default() }).unwrap();
+        assert_eq!(needs.iter().map(|x| x.id).collect::<Vec<_>>(), vec![b]);
+        assert!(needs[0].has_text && needs[0].needs_place);
+        assert_eq!(c.replace_place("Lince", "Lima").unwrap(), vec![a]);
+        assert_eq!(c.develop(a).unwrap().unwrap().text.unwrap().place, "Lima");
 
         c.rename_asset(a, "/p/renamed.jpg").unwrap();
         let ra = c.asset(a).unwrap();

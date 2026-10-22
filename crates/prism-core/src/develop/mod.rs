@@ -39,6 +39,8 @@ pub struct DevelopSettings {
     pub lens: crate::lens::LensSettings,
     /// Heal/clone spots, in source image coordinates.
     pub spots: Vec<retouch::Spot>,
+    /// Text on the photo (date, place, …), drawn last.
+    pub text: Option<crate::overlay::TextOverlay>,
 }
 
 impl Default for DevelopSettings {
@@ -57,6 +59,7 @@ impl Default for DevelopSettings {
             local: Vec::new(),
             lens: Default::default(),
             spots: Vec::new(),
+            text: None,
         }
     }
 }
@@ -68,6 +71,9 @@ impl DevelopSettings {
         s.version = SETTINGS_VERSION;
         s.local.retain(|l| l.enabled);
         s.spots.retain(|p| p.enabled);
+        if s.text.as_ref().is_some_and(|t| t.is_empty()) {
+            s.text = None;
+        }
         s == Self::default()
     }
 }

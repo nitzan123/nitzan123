@@ -3,14 +3,14 @@
 //! For each file prints EXIF, then writes `<name>.preview.jpg` (embedded /
 //! display path), `<name>.raw.jpg` (decoded, no adjustments) and
 //! `<name>.auto.jpg` (auto settings) into `out_dir`, plus
-//! `<name>.caption.jpg` with a date/place caption (place via OpenStreetMap
+//! `<name>.caption.jpg` with "place, date" text (town via OpenStreetMap
 //! when the file has GPS). Handy for checking output without the GUI.
 
 use prism_core::develop::{auto::auto_settings, render_to_rgb8};
-use prism_core::geocode::{format_coords, Geocoder};
+use prism_core::geocode::{Geocoder, PlaceDetail};
 use prism_core::imaging::{load_display, load_linear};
 use prism_core::metadata::read_exif;
-use prism_core::overlay::{caption_lines, draw_caption, Caption};
+use prism_core::overlay::{format_date, DateFormat, TextOverlay};
 use prism_core::DevelopSettings;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -50,16 +50,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             s.light.shadows
         );
 
-        let mut img = render_to_rgb8(&load_linear(&file, 0)?, &DevelopSettings::default());
-        let place = exif.gps.map(|[lat, lon]| match geocoder.reverse(lat, lon, "en") {
-            Ok(Some(p)) => p,
-            _ => format_coords(lat, lon),
-        });
-        let caption = Caption { custom_text: "(c) Prism Studio".into(), ..Default::default() };
-        let lines = caption_lines(&caption, exif.taken_at.as_deref(), place.as_deref());
-        draw_caption(&mut img, &lines, &caption);
+        let text = TextOverlay {
+            place: exif
+                .gps
+                .and_then(|[lat, lon]| geocoder.lookup(lat, lon, "", PlaceDetail::City).ok().flatten())
+                .unwrap_or_default(),
+            date: exif.taken_at.as_deref().and_then(|d| format_date(d, DateFormat::Dotted)).unwrap_or_default(),
+            ..Default::default()
+        };
+        let s = DevelopSettings { text: Some(text.clone()), ..Default::default() };
+        let img = render_to_rgb8(&load_linear(&file, 0)?, &s);
         img.save(out.join(format!("{name}.caption.jpg")))?;
-        println!("  caption        {lines:?}  ({}x{})", img.width(), img.height());
+        println!("  text           {:?}  ({}x{})", text.parts(), img.width(), img.height());
     }
     Ok(())
 }

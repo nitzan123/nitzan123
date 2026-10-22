@@ -45,6 +45,7 @@
           <div class="filter-row" id="label-filter" aria-label="Colour label"></div>
           <label class="check"><input type="checkbox" id="tagged-filter" /> Tagged only</label>
           <label class="check"><input type="checkbox" id="developed-filter" /> Developed only</label>
+          <label class="check"><input type="checkbox" id="missing-filter" /> 📍 Missing place only</label>
           <div class="date-row">
             <label>Taken from<input type="date" id="date-from" /></label>
             <label>to<input type="date" id="date-to" /></label>
@@ -93,6 +94,8 @@
           <button id="sort-dir" class="icon-btn" title="Sort direction">↑</button>
           <input id="thumb-size" type="range" min="120" max="360" value="190" aria-label="Thumbnail size" />
           <span id="count" class="muted"></span>
+          <button id="manage-missing" class="chip missing" hidden title="Show only photos whose text still needs a place"></button>
+          <button id="manage-text" class="btn small" title="Add date and place text to the selected photos">📝 Date &amp; place…</button>
           <button id="manage-preset" class="btn small" title="Apply a develop preset to the selected photos">Preset…</button>
           <button id="manage-rename" class="btn small" title="Rename the selected files">Rename…</button>
           <button id="manage-export" class="btn small primary" title="Export selected photos">Export…</button>
@@ -190,40 +193,16 @@
         <label class="check"><input type="checkbox" id="exp-gps" checked /> Include location (GPS)</label>
       </div>
       <label class="block">Copyright <input id="exp-copyright" type="text" placeholder="e.g. © 2026 Your Name" /></label>
-      <label class="check"><input type="checkbox" id="cap-enabled" /> Add text on photo (date, place, custom)</label>
-      <div id="cap-options" class="cap-options" hidden>
-        <div class="cap-grid">
-          <label class="check"><input type="checkbox" id="cap-date" checked /> Date taken</label>
-          <select id="cap-date-format" aria-label="Date format">
-            <option value="long">17 May 2024, 14:03</option>
-            <option value="longDate">17 May 2024</option>
-            <option value="iso">2024-05-17 14:03</option>
-            <option value="numeric">17/05/2024</option>
-          </select>
-          <label class="check"><input type="checkbox" id="cap-location" checked /> Place (from GPS)</label>
-          <select id="cap-lang" aria-label="Place name language">
-            <option value="en">English names</option>
-            <option value="he">Hebrew names</option>
-            <option value="">Local names</option>
-          </select>
-          <label for="cap-text">Custom text</label>
-          <input id="cap-text" type="text" placeholder="e.g. © Your Name" />
-          <label for="cap-corner">Corner</label>
-          <select id="cap-corner">
-            <option value="bottomRight">Bottom right</option>
-            <option value="bottomLeft">Bottom left</option>
-            <option value="topRight">Top right</option>
-            <option value="topLeft">Top left</option>
-          </select>
-          <label for="cap-size">Text size</label>
-          <input id="cap-size" type="range" min="1.5" max="8" step="0.5" value="3" />
-        </div>
-        <p id="cap-privacy" class="hint">Place names are looked up on OpenStreetMap: each photo's GPS coordinates (rounded to ~100 m) are sent to openstreetmap.org. Results are cached. Without internet, coordinates are written instead.</p>
-        <img id="cap-preview" class="cap-preview" alt="Caption preview" hidden />
-        <p id="cap-note" class="hint"></p>
-      </div>
+      <p class="hint">Text on photos (date, place…) is part of each photo's edit: add it with <b>Date &amp; place…</b> in Manage, then export.</p>
       <p class="muted" id="exp-count"></p>
       <menu><button value="ok" class="btn primary">Choose folder & export</button><button value="cancel" class="btn">Cancel</button></menu>
+    </form>
+  </dialog>
+  <dialog id="text-dialog" aria-labelledby="text-title">
+    <form method="dialog" class="export-form">
+      <h3 id="text-title">Date &amp; place on photos</h3>
+      <div id="text-form"></div>
+      <menu><button value="ok" class="btn primary">Add to photos</button><button value="cancel" class="btn">Cancel</button></menu>
     </form>
   </dialog>
   <dialog id="preset-dialog" aria-labelledby="preset-title">

@@ -54,7 +54,11 @@ pub fn render_to_rgb8(src: &LinearImage, s: &DevelopSettings) -> RgbImage {
     let f = render(src, s);
     let (w, h) = f.dimensions();
     let bytes = f.as_raw().iter().map(|v| (v * 255.0 + 0.5) as u8).collect();
-    RgbImage::from_raw(w, h, bytes).expect("buffer size")
+    let mut out = RgbImage::from_raw(w, h, bytes).expect("buffer size");
+    if let Some(t) = &s.text {
+        t.draw(&mut out);
+    }
+    out
 }
 
 /// Linear RGB gains for the temperature/tint sliders. Shared with auto

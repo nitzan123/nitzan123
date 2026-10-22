@@ -7,6 +7,7 @@ import { openExportDialog } from "./export.js";
 import { aiAnalyzed, open as openAi } from "./ai.js";
 import { renderTree, folderTree, calendarTree } from "./tree.js";
 import * as map from "./map.js";
+import { propsSection } from "./text.js";
 
 let smartMode = false;
 let folderExpanded = null; // Set of expanded folder keys (roots open at first)
@@ -38,7 +39,16 @@ export async function reload({ keepFocus = true } = {}) {
   store.focus = focusedId != null ? store.assets.findIndex((a) => a.id === focusedId) : -1;
   if (store.focus < 0 && store.assets.length) store.focus = 0;
   $("count").textContent = `${store.assets.length} photo${store.assets.length === 1 ? "" : "s"}`;
-  for (const b of ["manage-export", "manage-preset", "manage-rename"]) $(b).disabled = store.assets.length === 0;
+  for (const b of ["manage-export", "manage-preset", "manage-rename", "manage-text"]) $(b).disabled = store.assets.length === 0;
+  if (store.query.needsPlace && !store.assets.length) {
+    toast("All photos have a place ✓");
+    return patchQuery({ needsPlace: undefined });
+  }
+  const missing = store.assets.filter((a) => a.needsPlace).length;
+  const chip = $("manage-missing");
+  chip.hidden = !missing && !store.query.needsPlace;
+  chip.classList.toggle("active", !!store.query.needsPlace);
+  chip.textContent = store.query.needsPlace ? `📍 ${missing} missing place ✕` : `📍 ${missing} missing place`;
   $("breadcrumb").textContent = store.scope;
   $("empty").hidden = store.layout === "map" || store.assets.length > 0 || !!hasFilters();
   relayout(true);
@@ -65,7 +75,7 @@ function setLayout(kind) {
 function hasFilters() {
   const q = store.query;
   return q.folder || q.folderTree || q.text || q.minRating || q.colorLabel != null || q.tagged || q.keyword || q.collectionId
-    || q.personId != null || q.dateFrom || q.dateTo || q.dated != null || q.camera || q.developed;
+    || q.personId != null || q.dateFrom || q.dateTo || q.dated != null || q.camera || q.developed || q.needsPlace;
 }
 
 function setScope(scope, patch) {
@@ -193,6 +203,8 @@ function buildFilters() {
   );
   $("tagged-filter").onchange = (e) => patchQuery({ tagged: e.target.checked || undefined });
   $("developed-filter").onchange = (e) => patchQuery({ developed: e.target.checked || undefined });
+  $("missing-filter").onchange = (e) => patchQuery({ needsPlace: e.target.checked || undefined });
+  $("manage-missing").onclick = () => patchQuery({ needsPlace: store.query.needsPlace ? undefined : true });
   $("date-from").onchange = (e) => patchQuery({ dateFrom: e.target.value || undefined, calendarKey: undefined, dated: undefined });
   $("date-to").onchange = (e) => patchQuery({ dateTo: e.target.value || undefined, calendarKey: undefined, dated: undefined });
   $("camera-filter").oninput = (e) => {
@@ -203,6 +215,7 @@ function buildFilters() {
     patchQuery({
       minRating: undefined, colorLabel: undefined, tagged: undefined, developed: undefined,
       dateFrom: undefined, dateTo: undefined, dated: undefined, calendarKey: undefined, camera: undefined,
+      needsPlace: undefined,
     });
   $("save-search").onclick = async () => {
     const name = await promptText("Save current search as");
@@ -239,6 +252,7 @@ function syncFilterUi() {
     c.classList.toggle("active", c.dataset.l === (q.colorLabel == null ? "any" : String(q.colorLabel))));
   $("tagged-filter").checked = !!q.tagged;
   $("developed-filter").checked = !!q.developed;
+  $("missing-filter").checked = !!q.needsPlace;
   $("date-from").value = q.dateFrom || "";
   $("date-to").value = q.dateTo || "";
   $("camera-filter").value = q.camera || "";
@@ -293,7 +307,8 @@ function cell(a) {
     el("div", { class: "img" },
       el("img", { src: urls.thumb(a), loading: "lazy", alt: "", draggable: "false" }),
       a.tagged ? el("span", { class: "tagmark", title: "Tagged" }, "✓") : null,
-      a.developed ? el("span", { class: "devmark", title: "Developed" }, "◐") : null),
+      a.developed ? el("span", { class: "devmark", title: "Developed" }, "◐") : null,
+      a.needsPlace ? el("span", { class: "placemark", title: "Text without a place: select it and type the place on the right" }, "📍 place?") : null),
     el("div", { class: "meta" },
       el("div", { class: "name" }, a.fileName),
       el("div", { class: "badges" },
@@ -398,6 +413,9 @@ async function renderProps() {
   const tagged = el("label", { class: "check" },
     el("input", { type: "checkbox", checked: asset.tagged, onchange: (e) => emit("set-tagged", { ids: ids(), tagged: e.target.checked }) }), "Tagged (T)");
 
+  const textBox = el("div", {});
+  propsSection(asset, ids()).then((sec) => token === propsToken && textBox.replaceChildren(sec)).catch(() => {});
+
   const caption = el("textarea", { placeholder: "Caption", "aria-label": "Caption" });
   caption.value = asset.caption || "";
   caption.onchange = () => api.setCaption(asset.id, caption.value).then(() => toast("Caption saved"));
@@ -488,6 +506,7 @@ async function renderProps() {
     el("img", { class: "preview", src: urls.thumb(asset), alt: "" }),
     el("div", { class: "breadcrumb" }, n > 1 ? `${n} selected` : asset.fileName),
     stars, labels, tagged,
+    textBox,
     el("h3", {}, "Caption"), caption,
     el("h3", {}, "Keywords"), kwList, kwInput,
     aiBox,
@@ -608,6 +627,7 @@ export function init() {
     updateAssets(ids, () => api.setTagged(ids, tagged), { tagged });
   });
   on("asset-developed", (id) => updateAssets([id], async () => {}));
+  on("text-changed", () => renderProps());
   on("key", (e) => {
     if (store.mode !== "manage") return;
     if (moveFocus(e)) return;

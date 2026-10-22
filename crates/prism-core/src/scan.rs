@@ -53,9 +53,14 @@ pub fn scan_files(paths: &[PathBuf]) -> Vec<ScannedFile> {
                 exif.width = None;
                 exif.height = None;
             }
+            let file_name = p.file_name()?.to_string_lossy().into_owned();
+            // Messaging apps strip EXIF; the file name often still has the date.
+            if exif.taken_at.is_none() {
+                exif.taken_at = crate::metadata::date_from_filename(&file_name);
+            }
             Some(ScannedFile {
                 folder: p.parent().map(Path::to_path_buf).unwrap_or_default(),
-                file_name: p.file_name()?.to_string_lossy().into_owned(),
+                file_name,
                 ext: ext_of(p),
                 size,
                 mtime,

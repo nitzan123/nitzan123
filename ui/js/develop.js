@@ -10,6 +10,7 @@ import { setFocus } from "./manage.js";
 import * as edit from "./edit.js";
 import { openExportDialog } from "./export.js";
 import { loadPresets, applyLook } from "./workflow.js";
+import { developSection } from "./text.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -27,6 +28,7 @@ export const defaults = () => ({
   geometry: { rotate90: 0, flipHorizontal: false, straighten: 0, crop: null },
   local: [],
   spots: [],
+  text: null,
   lens: {
     enabled: false, profile: null, distortion: 100, vignetting: 100, ca: 100,
     manualDistortion: 0, manualVignetting: 0, manualCaRed: 0, manualCaBlue: 0,
@@ -79,6 +81,7 @@ function bind(path, opts) {
 function refreshControls() {
   for (const b of bindings) b.ctrl.update(b.get());
   curve?.update(dev.s.curve.points);
+  textUi?.refresh();
   refreshLensUi();
   edit.render(ctx);
 }
@@ -259,7 +262,10 @@ function cropSlider(key, label) {
   return ctrl;
 }
 
+let textUi;
+
 function buildPanel() {
+  textUi = developSection(ctx);
   const p = $("dev-panel");
   const mixerGroups = ["hue", "saturation", "luminance"].map((kind, gi) => {
     const g = el("div", { hidden: gi !== 0 },
@@ -280,6 +286,7 @@ function buildPanel() {
       el("button", { class: "btn small", onclick: autoWb, title: "Conservative automatic white balance" }, "Auto WB"),
       btn("Copy", copySettings, "Copy develop settings"),
       btn("Paste", pasteSettings, "Paste develop settings to the selection")),
+    section("Text on photo", true, textUi.el),
     section("Presets", false, presetGrid),
     section("White balance", true,
       bind("whiteBalance.temperature", { label: "Temperature", min: -100, max: 100 }),
@@ -462,12 +469,12 @@ let clipboard = null;
  * profile (resolved for that photo's lens/focal/aperture) stay the target's. */
 const pasted = (target) => {
   const c = JSON.parse(JSON.stringify(clipboard));
-  return { ...target, ...c, local: target.local, spots: target.spots, lens: { ...c.lens, enabled: target.lens.enabled, profile: target.lens.profile } };
+  return { ...target, ...c, local: target.local, spots: target.spots, text: target.text, lens: { ...c.lens, enabled: target.lens.enabled, profile: target.lens.profile } };
 };
 
 function copySettings() {
-  const { local, spots, ...rest } = JSON.parse(JSON.stringify(dev.s));
-  clipboard = rest; // masks and retouch spots are image-specific (lens profile handled in `pasted`)
+  const { local, spots, text, ...rest } = JSON.parse(JSON.stringify(dev.s));
+  clipboard = rest; // masks, spots and text are photo-specific (lens profile handled in `pasted`)
   toast("Develop settings copied (without local masks)");
 }
 
@@ -559,6 +566,18 @@ export function init() {
     if (store.current && store.current.id !== dev.id) await load(store.current);
     else preview();
     edit.drawOverlay(ctx);
+  });
+  // Text edited from Manage: reload this photo's settings next time.
+  on("text-changed", async (ids) => {
+    if (dev.id == null || !ids.includes(dev.id)) return;
+    await flushSave();
+    const fresh = await api.developGet(dev.id).catch(() => null);
+    if (fresh) {
+      dev.s.text = fresh.text ?? null;
+      dev.committed = JSON.stringify(dev.s);
+      refreshControls();
+      if (store.mode === "develop" || store.mode === "edit") preview();
+    }
   });
   on("focus-changed", () => {
     const working = store.mode === "develop" || store.mode === "edit";

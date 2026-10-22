@@ -156,9 +156,47 @@ pub fn normalize_exif_date(raw: &str) -> String {
     out
 }
 
+/// Capture date encoded in a file name by phones and messaging apps, e.g.
+/// `WhatsApp Image 2026-10-20 at 21.32.51.jpeg`, `IMG-20261020-WA0001.jpg`,
+/// `PXL_20261020_213251123.jpg`, `Screenshot_2026-10-20-21-32-51.png`.
+/// Returns `YYYY-MM-DD HH:MM:SS` (time `00:00:00` when absent).
+pub fn date_from_filename(name: &str) -> Option<String> {
+    use std::sync::OnceLock;
+    static RE: OnceLock<regex::Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| {
+        regex::Regex::new(
+            r"(?:^|[^0-9])((?:19|20)\d{2})[-_.]?(0[1-9]|1[0-2])[-_.]?(0[1-9]|[12]\d|3[01])(?:[ _T-]*(?:at[ _]?)?([01]\d|2[0-3])[.:_-]?([0-5]\d)(?:[.:_-]?([0-5]\d))?\d{0,3})?(?:[^0-9]|$)",
+        )
+        .expect("valid regex")
+    });
+    let c = re.captures(name)?;
+    let g = |i: usize| c.get(i).map(|m| m.as_str());
+    let (y, mo, d) = (g(1)?, g(2)?, g(3)?);
+    let day_ok =
+        d.parse::<u32>().ok()? <= [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][mo.parse::<usize>().ok()? - 1];
+    day_ok.then(|| format!("{y}-{mo}-{d} {}:{}:{}", g(4).unwrap_or("00"), g(5).unwrap_or("00"), g(6).unwrap_or("00")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dates_from_phone_and_whatsapp_file_names() {
+        let d = |n| date_from_filename(n);
+        assert_eq!(d("WhatsApp Image 2026-10-20 at 21.32.51.jpeg").as_deref(), Some("2026-10-20 21:32:51"));
+        assert_eq!(d("WhatsApp Image 2026-10-20 at 21.32.51 (1).jpeg").as_deref(), Some("2026-10-20 21:32:51"));
+        assert_eq!(d("IMG-20261020-WA0001.jpg").as_deref(), Some("2026-10-20 00:00:00"));
+        assert_eq!(d("PXL_20261020_213251123.jpg").as_deref(), Some("2026-10-20 21:32:51"));
+        assert_eq!(d("IMG_20240501_134510.jpg").as_deref(), Some("2024-05-01 13:45:10"));
+        assert_eq!(d("Screenshot_2026-10-20-21-32-51.png").as_deref(), Some("2026-10-20 21:32:51"));
+        assert_eq!(d("20240501.jpg").as_deref(), Some("2024-05-01 00:00:00"));
+        for none in
+            ["12.png", "IMG_1234.JPG", "DSC01234.ARW", "photo_123456789.jpg", "2024-02-30.jpg", "x2024050199.jpg"]
+        {
+            assert_eq!(d(none), None, "{none}");
+        }
+    }
 
     #[test]
     fn normalizes_exif_dates() {

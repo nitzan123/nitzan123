@@ -54,7 +54,12 @@ impl Geocoder {
     /// (e.g. open sea). Network errors are returned as `Err`. `language` is
     /// an Accept-Language value such as `en` or `he`; empty = local names.
     pub fn reverse(&self, lat: f64, lon: f64, language: &str) -> Result<Option<String>> {
-        let key = format!("{}|{language}", cache_key(lat, lon));
+        self.lookup(lat, lon, language, PlaceDetail::CityCountry)
+    }
+
+    /// Like [`Geocoder::reverse`] with a choice of detail.
+    pub fn lookup(&self, lat: f64, lon: f64, language: &str, detail: PlaceDetail) -> Result<Option<String>> {
+        let key = format!("{}|{language}|{detail:?}", cache_key(lat, lon));
         if let Some(hit) = self.memo.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
             return Ok(hit.clone());
         }
@@ -85,7 +90,10 @@ impl Geocoder {
         };
         *self.offline_since.lock().unwrap_or_else(|e| e.into_inner()) = None;
         let json: Value = serde_json::from_reader(resp.into_reader())?;
-        let place = format_place(&json);
+        let place = match detail {
+            PlaceDetail::CityCountry => format_place(&json),
+            PlaceDetail::City => format_locality(&json),
+        };
         self.memo.lock().unwrap_or_else(|e| e.into_inner()).insert(key, place.clone());
         Ok(place)
     }
@@ -130,6 +138,42 @@ pub fn format_place(json: &Value) -> Option<String> {
     }
 }
 
+/// How much of the place name to keep.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PlaceDetail {
+    /// `Chinchero`
+    #[default]
+    City,
+    /// `Chinchero, Perú`
+    CityCountry,
+}
+
+/// Just the town or city, without administrative prefixes such as
+/// "Distrito de" (Peru) — e.g. `Cusco`, `Chinchero`, `Tel Aviv-Yafo`.
+pub fn format_locality(json: &Value) -> Option<String> {
+    if json.get("error").is_some() {
+        return None;
+    }
+    let addr = json.get("address")?;
+    let field = |k: &str| addr.get(k).and_then(Value::as_str).filter(|s| !s.is_empty());
+    let name = ["city", "town", "village", "municipality", "hamlet", "suburb", "county", "state"]
+        .iter()
+        .find_map(|k| field(k))?;
+    const PREFIXES: [&str; 8] = [
+        "Distrito de ",
+        "Provincia de ",
+        "Municipio de ",
+        "Municipalidad de ",
+        "Comune di ",
+        "Gemeinde ",
+        "Commune de ",
+        "District of ",
+    ];
+    let trimmed = PREFIXES.iter().find_map(|p| name.strip_prefix(p)).unwrap_or(name);
+    Some(trimmed.trim().to_string())
+}
+
 /// Human-readable coordinates, e.g. `32.0853° N, 34.7818° E`.
 pub fn format_coords(lat: f64, lon: f64) -> String {
     format!(
@@ -145,6 +189,20 @@ pub fn format_coords(lat: f64, lon: f64) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn locality_drops_country_and_admin_prefixes() {
+        let j = |a: serde_json::Value| serde_json::json!({ "address": a });
+        assert_eq!(
+            format_locality(&j(serde_json::json!({"city": "Distrito de Cusco", "state": "Cusco"}))).as_deref(),
+            Some("Cusco")
+        );
+        assert_eq!(
+            format_locality(&j(serde_json::json!({"town": "Chinchero", "country": "Perú"}))).as_deref(),
+            Some("Chinchero")
+        );
+        assert_eq!(format_locality(&serde_json::json!({"error": "Unable to geocode"})), None);
+    }
 
     #[test]
     fn formats_city_and_country() {

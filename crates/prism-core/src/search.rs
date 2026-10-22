@@ -13,6 +13,8 @@ pub struct SearchQuery {
     pub folder_tree: Option<String>,
     /// Only photos with (`true`) or without (`false`) a GPS position.
     pub has_gps: Option<bool>,
+    /// Only photos whose text still lacks a place (`true`), or the rest.
+    pub needs_place: Option<bool>,
     /// Only photos with (`true`) or without (`false`) a capture date.
     pub dated: Option<bool>,
     pub min_rating: Option<u8>,
