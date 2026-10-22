@@ -40,7 +40,7 @@ Develop ─► develop_preview(id, settings, max) ─► cached linear source (L
 | ✓ | Face detection/recognition + People view | YuNet + SFace, greedy clustering at cosine 0.40 |
 | ✓ | Embedding similarity + text search | TinyCLIP; brute-force cosine (ANN index when libraries exceed ~100k) |
 | ✓ | AI keywording | CLIP zero-shot over a fixed vocabulary |
-| 7 | Interactive crop handles, brush masks, heal/clone | Edit mode |
+| 7 | Interactive crop handles | brush masks and heal/clone done |
 | ✓ | Presets (save/apply develop looks), batch rename/resize | `workflow.rs` |
-| 9 | Export: AVIF, 16-bit TIFF, metadata embedding, watermark | JPEG/PNG/TIFF/WebP done |
-| 10 | Catalog: folder watch (notify), offline volumes | folder tree, calendar and map views done |
+| 9 | Export: AVIF, 16-bit TIFF, watermark | JPEG/PNG/TIFF/WebP with EXIF/XMP done |
+| 10 | Catalog: offline volumes | folder watch, folder tree, calendar and map views done |

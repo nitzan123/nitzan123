@@ -1,0 +1,117 @@
+name: Release
+
+# Builds installers for Windows, macOS and Linux and attaches them to a
+# draft GitHub release. Push a tag like `v0.2.0` (or run it by hand).
+#
+# Signing is optional and switches on per platform when its secrets exist
+# (see docs/releasing.md). Without them the installers are built unsigned.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            name: windows
+            args: ""
+          - os: macos-latest
+            name: macos
+            args: --target universal-apple-darwin
+          - os: ubuntu-22.04
+            name: linux
+            args: ""
+    runs-on: ${{ matrix.os }}
+    name: ${{ matrix.name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Linux dependencies
+        if: matrix.name == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev librsvg2-dev \
+            libayatana-appindicator3-dev patchelf rpm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.name == 'macos' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.name }}
+
+      # macOS: sign with a Developer ID certificate and notarize, when the
+      # Apple secrets are configured.
+      - name: macOS signing setup
+        if: matrix.name == 'macos'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -n "$APPLE_CERTIFICATE" ] && [ -n "$APPLE_SIGNING_IDENTITY" ]; then
+            for v in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+              # Single line: a wrapped base64 certificate would break GITHUB_ENV.
+              if [ -n "${!v}" ]; then echo "$v=$(printf '%s' "${!v}" | tr -d '\r\n')" >> "$GITHUB_ENV"; fi
+            done
+            echo "macOS: signing enabled${APPLE_ID:+ with notarization}"
+          else
+            echo "::warning::macOS build is unsigned (APPLE_* secrets not set). Users will see a Gatekeeper warning."
+          fi
+
+      # Windows: Authenticode-sign the MSI/NSIS installers and the app, when
+      # a code-signing certificate (PFX) is configured.
+      - name: Windows signing setup
+        if: matrix.name == 'windows'
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          if ($env:WINDOWS_CERTIFICATE) {
+            $pfx = Join-Path $env:RUNNER_TEMP "cert.pfx"
+            [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
+            $pass = ConvertTo-SecureString -String $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
+            $cert = Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $pass
+            Remove-Item $pfx
+            $config = @{ bundle = @{ windows = @{
+              certificateThumbprint = $cert.Thumbprint
+              digestAlgorithm = "sha256"
+              timestampUrl = "http://timestamp.digicert.com"
+            } } } | ConvertTo-Json -Depth 5
+            Set-Content -Path src-tauri/tauri.signing.conf.json -Value $config
+            "TAURI_EXTRA_CONFIG=--config src-tauri/tauri.signing.conf.json" | Out-File -FilePath $env:GITHUB_ENV -Append
+            Write-Host "Windows: signing enabled"
+          } else {
+            Write-Host "::warning::Windows build is unsigned (WINDOWS_CERTIFICATE not set). SmartScreen will warn users."
+          }
+
+      - name: Build installers
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: src-tauri
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || format('v__VERSION__-{0}', github.run_number) }}
+          releaseName: Prism Studio ${{ github.ref_type == 'tag' && github.ref_name || 'v__VERSION__ (test build)' }}
+          releaseBody: |
+            Installers for Windows (.msi / .exe), macOS (.dmg, Apple Silicon + Intel) and Linux (.deb / .rpm / .AppImage).
+            See the README for what's new and docs/releasing.md for signing status.
+          releaseDraft: true
+          prerelease: ${{ github.ref_type != 'tag' }}
+          args: ${{ matrix.args }} ${{ env.TAURI_EXTRA_CONFIG }}

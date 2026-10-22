@@ -18,6 +18,9 @@ for what was studied and where the clean-room boundary sits.
 ## Features
 
 **Manage**
+- **Folders stay in sync**: while the app runs it watches your library
+  folders, so photos copied in, edited elsewhere, renamed or deleted show up
+  by themselves (changes are batched; a camera import is one update).
 - **Folder tree**: nested folders with photo counts; selecting a folder
   shows it with everything below it.
 - **Calendar**: browse by year › month › day of capture (plus "No date").
@@ -71,9 +74,15 @@ and 1:1 zoom with panning (`Z` or click).
 
 **Edit**: local adjustments, each with its own exposure, contrast,
 saturation, temperature, tint and blur.
-- Masks: radial, linear gradient, **sky (auto-detect)** and whole image. Any
-  mask can be inverted or limited to a brightness range.
-- Drag the handles on the photo to place a mask.
+- Masks: **brush** (paint and erase, with size, feather and flow), radial,
+  linear gradient, **sky (auto-detect)**, AI subject/sky and whole image.
+  Any mask can be inverted or limited to a brightness range.
+- Drag the handles on the photo to place a mask, or paint it.
+- **Heal and clone** spot retouching: click a blemish and the best
+  matching source is picked for you (or drag to choose it). Heal blends the
+  copied texture into the surrounding light and colour; clone copies
+  exactly. Spots are anchored to the original photo, so they stay in place
+  if you crop or rotate afterwards.
 - Quick looks: Brighten sky, Dramatic sky, Blur background, Spotlight,
   Warm foreground.
 
@@ -109,6 +118,11 @@ saturation, temperature, tint and blur.
 **Export**: JPEG, PNG, TIFF or WebP (lossless), full-size or resized, with
 your develop settings applied and an optional file-name template (same
 tokens as rename). Available from Manage (batch) and Develop.
+- **Metadata is embedded** in every format: EXIF (camera, lens, exposure,
+  capture date, GPS, copyright) and XMP (rating, keywords, caption,
+  copyright), readable by Lightroom, Photos, Google Photos, Flickr and
+  others. Options: leave metadata out, drop just the location (for public
+  sharing), and add a copyright line.
 - **Text on photo**: optionally burn a caption into a corner of the exported
   copies, with a live preview in the dialog. It can include:
   - the capture date, in one of four formats;
@@ -141,14 +155,17 @@ Requirements: Rust (stable) and the
 ```bash
 cargo run -p prism-studio --release                # start the app
 cargo run -p prism-studio --release -- ~/Pictures  # start and index a folder
-cargo test --workspace                             # 83 tests (unit + robustness)
+cargo test --workspace                             # 93 tests (unit + robustness)
 ```
 
-To build installers (`.msi`/`.exe`, `.dmg`, `.deb`/`.AppImage`):
+**Installers**: pushing a tag like `v0.2.0` makes GitHub Actions build
+Windows (`.msi`, `.exe`), macOS (universal `.dmg`) and Linux (`.deb`,
+`.rpm`, `.AppImage`) installers into a draft release, signed and notarized
+when signing certificates are configured. See
+[docs/releasing.md](docs/releasing.md). To build one locally:
 
 ```bash
-cargo install tauri-cli --version "^2"
-cd src-tauri && cargo tauri build
+cd src-tauri && npx @tauri-apps/cli@2 build   # output: target/release/bundle/
 ```
 
 There is also a headless develop tool, useful for checking decoder and
@@ -160,7 +177,7 @@ cargo run --release --example develop_cli -- out/ photo1.NEF photo2.CR2
 
 ## Quality
 
-- **83 automated tests**, including an end-to-end robustness suite. It uses a
+- **93 automated tests**, including an end-to-end robustness suite. It uses a
   generated library of awkward files: Hebrew folder and file names, spaces,
   EXIF-rotated portraits, 16-bit TIFF, alpha PNG, 1×1 images, empty, truncated
   and fake files. It checks that everything indexes, thumbnails, decodes and
@@ -193,15 +210,17 @@ crates/prism-core   UI-agnostic engine (all logic, all tests)
   thumbs.rs         content-keyed on-disk thumbnail cache (+ developed variants)
   similarity.rs     dHash + Hamming distance
   xmp.rs            sidecar read/write
-  develop/          settings model, render pipeline, masks, auto
+  embed.rs          EXIF/XMP writer for exported files (JPEG, PNG, WebP, TIFF)
+  watch.rs          turns file-system change bursts into minimal index/prune jobs
+  develop/          settings model, render pipeline, masks (incl. brush), heal/clone, auto
   workflow.rs       presets, file-name templates, safe batch rename, export encoders
   ai/               model download, faces (YuNet/SFace), CLIP + tokenizer, U²-Netp, keyword vocabulary
-src-tauri           Tauri shell: commands, background indexer and AI job, prism:// image protocol
+src-tauri           Tauri shell: commands, background indexer, folder watcher, AI job, prism:// image protocol
 ui                  vanilla ES modules, no build step
 ```
 
 Render pipeline order (see `develop/pipeline.rs`):
-lens correction → geometry → WB / exposure (linear) → tone (highlights, shadows, whites,
+heal/clone spots → lens correction → geometry → WB / exposure (linear) → tone (highlights, shadows, whites,
 blacks, contrast with roll-off) → clarity → display sRGB → tone curve →
 colour mixer, vibrance, saturation → split tone → local masks → vignette →
 noise reduction and sharpening.
@@ -217,6 +236,14 @@ noise reduction and sharpening.
   the main subject may be partly treated as background. Keyword suggestions
   are limited to the built-in vocabulary. Analysis takes about 0.3 s per
   photo plus about 3 s per AI mask.
+- Masks (radial, gradient, brush) are placed on the developed frame, so
+  changing the crop afterwards moves them with the frame; heal/clone spots
+  don't move. Healing works best with small spots: a spot whose edge
+  crosses a strong edge (an object outline) can smear it, as with any
+  healing brush; drag the source or use clone there.
+- Folder watching covers folders added with "Add folder". In catalogs from
+  older versions, the folders that held photos are watched; add the parent
+  folder once to also catch brand-new subfolders.
 - WebP export is lossless only (the pure-Rust encoder has no lossy mode);
   exports are 8-bit. Renames can't be undone from the app, which is why the
   dialog previews every name first. HEIC and CR3 full decode are not
