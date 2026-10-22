@@ -13,9 +13,11 @@ use crate::raw::LinearImage;
 
 fn sample(src: &LinearImage) -> Vec<[f32; 3]> {
     src.as_raw()
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .step_by(((src.width() * src.height()) as usize / 200_000).max(1))
-        .map(|c| [c[0], c[1], c[2]])
+        .copied()
         .collect()
 }
 

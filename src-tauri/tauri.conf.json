@@ -52,6 +52,145 @@
     "macOS": {
       "minimumSystemVersion": "11.0",
       "hardenedRuntime": true
+    },
+    "fileAssociations": [
+      {
+        "ext": [
+          "jpg",
+          "jpeg"
+        ],
+        "mimeType": "image/jpeg",
+        "name": "JPEG image",
+        "description": "JPEG image",
+        "role": "Viewer"
+      },
+      {
+        "ext": [
+          "png"
+        ],
+        "mimeType": "image/png",
+        "name": "PNG image",
+        "description": "PNG image",
+        "role": "Viewer"
+      },
+      {
+        "ext": [
+          "tif",
+          "tiff"
+        ],
+        "mimeType": "image/tiff",
+        "name": "TIFF image",
+        "description": "TIFF image",
+        "role": "Viewer"
+      },
+      {
+        "ext": [
+          "webp"
+        ],
+        "mimeType": "image/webp",
+        "name": "WebP image",
+        "description": "WebP image",
+        "role": "Viewer"
+      },
+      {
+        "ext": [
+          "dng"
+        ],
+        "mimeType": "image/x-adobe-dng",
+        "name": "DNG raw",
+        "description": "DNG raw",
+        "role": "Viewer"
+      },
+      {
+        "ext": [
+          "cr2"
+        ],
+        "mimeType": "image/x-canon-cr2",
+        "name": "Canon raw",
+        "description": "Canon raw",
+        "role": "Viewer"
+      },
+      {
+        "ext": [
+          "cr3"
+        ],
+        "mimeType": "image/x-canon-cr3",
+        "name": "Canon raw",
+        "description": "Canon raw",
+        "role": "Viewer"
+      },
+      {
+        "ext": [
+          "nef"
+        ],
+        "mimeType": "image/x-nikon-nef",
+        "name": "Nikon raw",
+        "description": "Nikon raw",
+        "role": "Viewer"
+      },
+      {
+        "ext": [
+          "arw"
+        ],
+        "mimeType": "image/x-sony-arw",
+        "name": "Sony raw",
+        "description": "Sony raw",
+        "role": "Viewer"
+      },
+      {
+        "ext": [
+          "orf"
+        ],
+        "mimeType": "image/x-olympus-orf",
+        "name": "Olympus raw",
+        "description": "Olympus raw",
+        "role": "Viewer"
+      },
+      {
+        "ext": [
+          "rw2"
+        ],
+        "mimeType": "image/x-panasonic-rw2",
+        "name": "Panasonic raw",
+        "description": "Panasonic raw",
+        "role": "Viewer"
+      },
+      {
+        "ext": [
+          "raf"
+        ],
+        "mimeType": "image/x-fuji-raf",
+        "name": "Fujifilm raw",
+        "description": "Fujifilm raw",
+        "role": "Viewer"
+      },
+      {
+        "ext": [
+          "pef"
+        ],
+        "mimeType": "image/x-pentax-pef",
+        "name": "Pentax raw",
+        "description": "Pentax raw",
+        "role": "Viewer"
+      },
+      {
+        "ext": [
+          "srw"
+        ],
+        "mimeType": "image/x-samsung-srw",
+        "name": "Samsung raw",
+        "description": "Samsung raw",
+        "role": "Viewer"
+      }
+    ],
+    "linux": {
+      "deb": {
+        "desktopTemplate": "linux/prism-studio.desktop",
+        "section": "graphics"
+      },
+      "rpm": {
+        "desktopTemplate": "linux/prism-studio.desktop"
+      }
     }
   }
 }

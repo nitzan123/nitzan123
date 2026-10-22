@@ -52,6 +52,9 @@ function wireProgress() {
   });
   // Older catalogs learn photo locations in the background.
   api.listen("gps-backfilled", () => emit("library-changed"));
+  // Photos opened from the OS (file manager, "Open with", second launch).
+  api.listen("open-file", (path) => manage.openFromOs(path));
+  api.takePendingOpen().then((path) => path && manage.openFromOs(path)).catch(() => {});
   // Photos added, changed or removed on disk while the app runs.
   api.listen("library-watch", () => emit("library-changed"));
   api.listen("index-error", (msg) => {

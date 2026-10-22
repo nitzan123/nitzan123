@@ -1,0 +1,5 @@
+# Pinned so local builds and CI use the same compiler and clippy; a newer
+# stable can add lints that fail `-D warnings`. Bump deliberately.
+[toolchain]
+channel = "1.97.0"
+components = ["rustfmt", "clippy"]

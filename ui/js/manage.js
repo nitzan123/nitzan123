@@ -336,6 +336,29 @@ function onGridClick(e) {
   setFocus(i, false);
 }
 
+/**
+ * Shows a photo the OS asked us to open: waits until its folder has been
+ * indexed (the backend adds it), scopes the grid to that folder and opens
+ * the photo in View.
+ */
+export async function openFromOs(path) {
+  const name = path.split(/[\\/]/).pop();
+  for (let i = 0; i < 120; i++) {
+    const asset = await api.assetByPath(path).catch(() => null);
+    if (asset) {
+      await setScope(asset.folder, { folderTree: asset.folder });
+      const at = store.assets.findIndex((a) => a.id === asset.id);
+      if (at >= 0) {
+        setFocus(at);
+        emit("request-mode", "view");
+      }
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  toast(`Couldn't open ${name}: it isn't a photo Prism Studio can read`, true);
+}
+
 export function setFocus(i, select = true) {
   if (i < 0 || i >= store.assets.length) return;
   store.focus = i;

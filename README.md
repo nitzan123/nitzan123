@@ -18,6 +18,10 @@ for what was studied and where the clean-room boundary sits.
 ## Features
 
 **Manage**
+- **Open from anywhere**: double-click a photo or use "Open with" in your
+  file manager (JPEG, PNG, TIFF, WebP and common RAW formats). Its folder
+  joins the library and the photo opens; a running Prism Studio picks it up
+  instead of starting a second copy.
 - **Folders stay in sync**: while the app runs it watches your library
   folders, so photos copied in, edited elsewhere, renamed or deleted show up
   by themselves (changes are batched; a camera import is one update).
@@ -154,7 +158,7 @@ Requirements: Rust (stable) and the
 
 ```bash
 cargo run -p prism-studio --release                # start the app
-cargo run -p prism-studio --release -- ~/Pictures  # start and index a folder
+cargo run -p prism-studio --release -- ~/Pictures  # start and index a folder (or open a photo)
 cargo test --workspace                             # 93 tests (unit + robustness)
 ```
 

@@ -31,11 +31,7 @@ const GAMMA: f32 = 2.2;
 
 /// Renders `src` (linear light) to a display-space (sRGB, 0…1) image.
 pub fn render(src: &LinearImage, s: &DevelopSettings) -> Rgb32FImage {
-    let buf = Buf {
-        w: src.width() as usize,
-        h: src.height() as usize,
-        px: src.as_raw().chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect(),
-    };
+    let buf = Buf { w: src.width() as usize, h: src.height() as usize, px: src.as_raw().as_chunks::<3>().0.to_vec() };
     let mut buf = buf;
     super::retouch::apply(&mut buf, &s.spots);
     let bitmaps = align_bitmap_masks(&buf, s);

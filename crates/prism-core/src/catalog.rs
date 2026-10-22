@@ -423,6 +423,17 @@ impl Catalog {
         Ok(gone.len())
     }
 
+    pub fn asset_by_path(&self, path: &str) -> Result<Option<Asset>> {
+        Ok(self
+            .conn
+            .query_row(
+                &format!("SELECT {ASSET_COLUMNS} FROM assets a JOIN folders f ON f.id = a.folder_id WHERE a.path = ?1"),
+                [path],
+                asset_from_row,
+            )
+            .optional()?)
+    }
+
     pub fn asset(&self, id: i64) -> Result<Asset> {
         self.conn
             .query_row(
@@ -1376,6 +1387,8 @@ mod tests {
         c.rename_asset(a, "/p/renamed.jpg").unwrap();
         let ra = c.asset(a).unwrap();
         assert_eq!((ra.path.as_str(), ra.file_name.as_str()), ("/p/renamed.jpg", "renamed.jpg"));
+        assert_eq!(c.asset_by_path("/p/renamed.jpg").unwrap().map(|x| x.id), Some(a));
+        assert!(c.asset_by_path("/p/a.jpg").unwrap().is_none());
 
         c.set_phash(a, 0b1111).unwrap();
         c.set_phash(b, 0b1110).unwrap();

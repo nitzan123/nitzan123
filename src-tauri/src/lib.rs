@@ -4,6 +4,7 @@
 mod ai_job;
 mod commands;
 mod indexer;
+mod open;
 mod protocol;
 mod state;
 mod watcher;
@@ -14,19 +15,24 @@ use tauri::Manager;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // Must come first: a second launch hands its arguments (e.g. a photo
+        // double-clicked in the file manager) to this window and exits.
+        .plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
+            open::handle(app, open::from_args(argv.get(1..).unwrap_or_default(), std::path::Path::new(&cwd)), false);
+        }))
         .plugin(tauri_plugin_dialog::init())
+        .manage(open::PendingOpen::default())
         .setup(|app| {
             let data = app.path().app_data_dir()?;
             let cache = app.path().app_cache_dir()?;
             app.manage(AppState::open(&data, &cache)?);
             indexer::spawn_gps_backfill(app.handle().clone());
             app.manage(watcher::Watch::start(app.handle()));
-            // `prism-studio <folder>…` indexes folders on start.
-            for arg in std::env::args().skip(1) {
-                if std::path::Path::new(&arg).is_dir() {
-                    let _ = commands::add_folder(app.handle().clone(), arg, true);
-                }
-            }
+            // `prism-studio <folder | photo>…`: folders join the library; a
+            // photo is shown once its folder is indexed.
+            let args: Vec<String> = std::env::args().skip(1).collect();
+            let cwd = std::env::current_dir().unwrap_or_default();
+            open::handle(app.handle(), open::from_args(&args, &cwd), true);
             Ok(())
         })
         .register_asynchronous_uri_scheme_protocol("prism", protocol::handle)
@@ -80,7 +86,17 @@ pub fn run() {
             commands::ai_mask,
             commands::map_points,
             commands::spot_source,
+            commands::take_pending_open,
+            commands::asset_by_path,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Prism Studio");
+        .build(tauri::generate_context!())
+        .expect("error while building Prism Studio")
+        .run(|_app, _event| {
+            // macOS delivers "Open With" / double-clicked files as events.
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Opened { urls } = _event {
+                let paths = urls.into_iter().filter_map(|u| u.to_file_path().ok());
+                open::handle(_app, paths, false);
+            }
+        });
 }

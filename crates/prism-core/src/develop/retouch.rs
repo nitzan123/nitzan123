@@ -197,11 +197,7 @@ pub fn apply(b: &mut Buf, spots: &[Spot]) {
 
 /// [`auto_source`] on a linear image with `spots` already applied.
 pub fn auto_source_in(img: &crate::raw::LinearImage, spots: &[Spot], x: f32, y: f32, radius: f32) -> [f32; 2] {
-    let mut b = Buf {
-        w: img.width() as usize,
-        h: img.height() as usize,
-        px: img.as_raw().chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect(),
-    };
+    let mut b = Buf { w: img.width() as usize, h: img.height() as usize, px: img.as_raw().as_chunks::<3>().0.to_vec() };
     apply(&mut b, spots);
     auto_source(&b, x, y, radius)
 }

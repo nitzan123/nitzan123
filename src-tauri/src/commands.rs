@@ -865,3 +865,15 @@ pub async fn spot_source(
     .await
     .map_err(s)?
 }
+
+/// A photo the OS asked us to open before the UI was listening (once).
+#[tauri::command]
+pub fn take_pending_open(pending: State<'_, crate::open::PendingOpen>) -> Option<String> {
+    pending.0.lock().unwrap_or_else(|e| e.into_inner()).take()
+}
+
+/// The catalog entry for a file path, if it has been indexed.
+#[tauri::command]
+pub fn asset_by_path(state: State<'_, AppState>, path: String) -> CmdResult<Option<Asset>> {
+    state.catalog().asset_by_path(&path).map_err(s)
+}

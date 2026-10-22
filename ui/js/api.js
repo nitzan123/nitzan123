@@ -20,6 +20,8 @@ export const api = {
   addFolder: (path, recursive = true) => invoke("add_folder", { path, recursive }),
   rescanFolder: (path) => invoke("rescan_folder", { path }),
   folders: () => invoke("folders"),
+  takePendingOpen: () => invoke("take_pending_open"),
+  assetByPath: (path) => invoke("asset_by_path", { path }),
   calendar: () => invoke("calendar"),
   search: (query) => invoke("search", { query }),
   details: (id) => invoke("asset_details", { id }),
