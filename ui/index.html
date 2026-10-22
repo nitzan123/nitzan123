@@ -185,6 +185,11 @@
         <label>Long edge px (0 = full) <input id="exp-size" type="number" min="0" max="20000" value="0" /></label>
       </div>
       <label class="block">File names <input id="exp-names" type="text" placeholder="Original names — or e.g. {date}_{seq:3}" /></label>
+      <div class="row gap wrap">
+        <label class="check"><input type="checkbox" id="exp-meta" checked /> Embed metadata (camera, date, keywords, caption, rating)</label>
+        <label class="check"><input type="checkbox" id="exp-gps" checked /> Include location (GPS)</label>
+      </div>
+      <label class="block">Copyright <input id="exp-copyright" type="text" placeholder="e.g. © 2026 Your Name" /></label>
       <label class="check"><input type="checkbox" id="cap-enabled" /> Add text on photo (date, place, custom)</label>
       <div id="cap-options" class="cap-options" hidden>
         <div class="cap-grid">

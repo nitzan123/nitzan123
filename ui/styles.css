@@ -295,3 +295,5 @@ label.block { display: flex; flex-direction: column; gap: 4px; margin: 8px 0; }
 .map-popup-thumbs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; margin-bottom: 6px; }
 .map-popup-thumbs img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 3px; cursor: pointer; }
 .map-popup-thumbs img:hover, .map-popup-thumbs img:focus { outline: 2px solid var(--accent); }
+
+.row.wrap { flex-wrap: wrap; }

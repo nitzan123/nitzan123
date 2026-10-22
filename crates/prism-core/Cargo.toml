@@ -9,6 +9,7 @@ description = "Catalog, metadata, thumbnail and non-destructive develop engine f
 rusqlite = { version = "0.32", features = ["bundled"] }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "tiff", "webp", "gif", "bmp"] }
 kamadak-exif = "0.6"
+tiff = "0.11"
 rawloader = "0.37"
 rayon = "1.10"
 serde = { version = "1", features = ["derive"] }

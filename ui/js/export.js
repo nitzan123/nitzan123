@@ -12,6 +12,9 @@ const PREFS_KEY = "prism.export";
 const DEFAULT_PREFS = {
   format: "jpeg",
   names: "",
+  metadata: true,
+  gps: true,
+  copyright: "",
   quality: 92,
   size: 0,
   caption: false,
@@ -44,6 +47,9 @@ function readForm() {
   return {
     format: $("exp-format").value,
     names: $("exp-names").value.trim(),
+    metadata: $("exp-meta").checked,
+    gps: $("exp-gps").checked,
+    copyright: $("exp-copyright").value.trim(),
     quality: Math.round(Math.min(100, Math.max(10, Number($("exp-quality").value) || 92))),
     size: Math.round(Math.min(20000, Math.max(0, Number($("exp-size").value) || 0))),
     caption: $("cap-enabled").checked,
@@ -60,6 +66,9 @@ function readForm() {
 function writeForm(p) {
   $("exp-format").value = p.format;
   $("exp-names").value = p.names;
+  $("exp-meta").checked = p.metadata;
+  $("exp-gps").checked = p.gps;
+  $("exp-copyright").value = p.copyright;
   $("exp-quality").value = p.quality;
   $("exp-size").value = p.size;
   $("cap-enabled").checked = p.caption;
@@ -93,6 +102,8 @@ let previewTimer = null;
 function syncCaptionUi() {
   const p = readForm();
   $("exp-quality-wrap").hidden = p.format !== "jpeg";
+  $("exp-gps").disabled = !p.metadata;
+  $("exp-copyright").disabled = !p.metadata;
   $("cap-options").hidden = !p.caption;
   $("cap-privacy").hidden = !(p.caption && p.location);
   clearTimeout(previewTimer);
@@ -127,7 +138,7 @@ let wired = false;
 function wire() {
   if (wired) return;
   wired = true;
-  for (const id of ["exp-format", "cap-enabled", "cap-date", "cap-date-format", "cap-location", "cap-lang", "cap-corner", "cap-size"]) {
+  for (const id of ["exp-format", "exp-meta", "cap-enabled", "cap-date", "cap-date-format", "cap-location", "cap-lang", "cap-corner", "cap-size"]) {
     $(id).addEventListener("input", syncCaptionUi);
   }
   $("cap-text").addEventListener("input", syncCaptionUi);
@@ -162,6 +173,9 @@ export async function openExportDialog(beforeExport = async () => {}) {
       maxDim: prefs.size,
       caption: captionFrom(prefs),
       nameTemplate: prefs.names || null,
+      metadata: prefs.metadata,
+      includeGps: prefs.gps,
+      copyright: prefs.copyright || null,
     });
     const parts = [`Exported ${res.written.length} to ${dir}`];
     if (res.failed.length) parts.push(`failed ${res.failed.length}: ${res.failed[0]}`);

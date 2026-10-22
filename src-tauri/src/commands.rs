@@ -9,6 +9,7 @@ use prism_core::develop::{
     auto::{auto_settings, auto_white_balance},
     render_to_rgb8,
 };
+use prism_core::embed::{encode_with_meta, ExportMeta};
 use prism_core::geocode::{cache_key, format_coords};
 use prism_core::metadata::read_exif;
 use prism_core::overlay::{caption_lines, draw_caption, Caption};
@@ -414,11 +415,26 @@ pub struct ExportOptions {
     caption: Option<Caption>,
     /// File-name template (see `workflow::NameTemplate`); empty = original names.
     name_template: Option<String>,
+    /// Embed EXIF/XMP (camera, date, keywords, caption, rating).
+    metadata: bool,
+    /// Keep the GPS position in embedded metadata.
+    include_gps: bool,
+    /// Copyright notice written to EXIF and XMP.
+    copyright: Option<String>,
 }
 
 impl Default for ExportOptions {
     fn default() -> Self {
-        Self { format: ExportFormat::Jpeg, quality: 92, max_dim: 0, caption: None, name_template: None }
+        Self {
+            format: ExportFormat::Jpeg,
+            quality: 92,
+            max_dim: 0,
+            caption: None,
+            name_template: None,
+            metadata: true,
+            include_gps: true,
+            copyright: None,
+        }
     }
 }
 
@@ -426,7 +442,7 @@ impl Default for ExportOptions {
 /// optionally burning in a caption.
 #[tauri::command]
 pub async fn export(app: AppHandle, ids: Vec<i64>, dir: String, options: ExportOptions) -> CmdResult<ExportResult> {
-    let ExportOptions { format, quality, max_dim, caption, name_template } = options;
+    let ExportOptions { format, quality, max_dim, caption, name_template, metadata, include_gps, copyright } = options;
     let template = match name_template.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
         Some(t) => Some(NameTemplate::parse(t).map_err(s)?),
         None => None,
@@ -440,9 +456,10 @@ pub async fn export(app: AppHandle, ids: Vec<i64>, dir: String, options: ExportO
         let total = ids.len();
         for (i, id) in ids.into_iter().enumerate() {
             let mut job = || -> Result<PathBuf, String> {
-                let (asset, settings) = {
+                let (asset, settings, keywords) = {
                     let cat = state.catalog();
-                    (cat.asset(id).map_err(s)?, cat.develop(id).map_err(s)?.unwrap_or_default())
+                    let kw = if metadata { cat.keywords_of(id).map_err(s)? } else { Vec::new() };
+                    (cat.asset(id).map_err(s)?, cat.develop(id).map_err(s)?.unwrap_or_default(), kw)
                 };
                 let src = prism_core::imaging::load_linear(Path::new(&asset.path), max_dim).map_err(s)?;
                 let mut img = render_to_rgb8(&src, &settings);
@@ -458,7 +475,13 @@ pub async fn export(app: AppHandle, ids: Vec<i64>, dir: String, options: ExportO
                     None => Path::new(&asset.file_name).file_stem().unwrap_or_default().to_string_lossy().to_string(),
                 };
                 let target = unique_path(&dir, &stem, format.extension());
-                std::fs::write(&target, format.encode(&img, quality).map_err(s)?).map_err(s)?;
+                let bytes = if metadata {
+                    let meta = ExportMeta::from_asset(&asset, keywords, include_gps, copyright.clone());
+                    encode_with_meta(format, &img, quality, &meta).map_err(s)?
+                } else {
+                    format.encode(&img, quality).map_err(s)?
+                };
+                std::fs::write(&target, bytes).map_err(s)?;
                 Ok(target)
             };
             match job() {

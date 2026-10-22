@@ -6,6 +6,7 @@ pub mod ai;
 pub mod catalog;
 pub mod demosaic;
 pub mod develop;
+pub mod embed;
 pub mod error;
 pub mod geocode;
 pub mod imaging;

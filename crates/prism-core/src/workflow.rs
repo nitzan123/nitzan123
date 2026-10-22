@@ -420,6 +420,41 @@ pub fn unique_path(dir: &Path, stem: &str, ext: &str) -> PathBuf {
 }
 
 #[cfg(test)]
+pub(crate) mod tests_support {
+    use crate::Asset;
+
+    /// A plain JPEG asset for tests in other modules.
+    pub fn asset() -> Asset {
+        Asset {
+            id: 1,
+            path: "/x/a.jpg".into(),
+            folder: "/x".into(),
+            file_name: "a.jpg".into(),
+            ext: "jpg".into(),
+            size: 1,
+            mtime: 0,
+            width: None,
+            height: None,
+            taken_at: None,
+            camera_make: None,
+            camera_model: None,
+            lens: None,
+            iso: None,
+            f_number: None,
+            exposure_time: None,
+            focal_length: None,
+            orientation: 1,
+            rating: 0,
+            color_label: 0,
+            tagged: false,
+            caption: None,
+            developed: false,
+            gps: None,
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::develop::{CropRect, LocalAdjustment};
