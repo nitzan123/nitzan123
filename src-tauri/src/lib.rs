@@ -6,6 +6,7 @@ mod commands;
 mod indexer;
 mod protocol;
 mod state;
+mod watcher;
 
 use state::AppState;
 use tauri::Manager;
@@ -19,11 +20,11 @@ pub fn run() {
             let cache = app.path().app_cache_dir()?;
             app.manage(AppState::open(&data, &cache)?);
             indexer::spawn_gps_backfill(app.handle().clone());
+            app.manage(watcher::Watch::start(app.handle()));
             // `prism-studio <folder>…` indexes folders on start.
             for arg in std::env::args().skip(1) {
-                let p = std::path::PathBuf::from(arg);
-                if p.is_dir() {
-                    indexer::spawn(app.handle().clone(), p, true);
+                if std::path::Path::new(&arg).is_dir() {
+                    let _ = commands::add_folder(app.handle().clone(), arg, true);
                 }
             }
             Ok(())

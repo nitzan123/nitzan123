@@ -19,6 +19,7 @@ pub mod search;
 pub mod similarity;
 pub mod thumbs;
 pub mod tiles;
+pub mod watch;
 pub mod workflow;
 pub mod xmp;
 

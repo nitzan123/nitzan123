@@ -52,6 +52,8 @@ function wireProgress() {
   });
   // Older catalogs learn photo locations in the background.
   api.listen("gps-backfilled", () => emit("library-changed"));
+  // Photos added, changed or removed on disk while the app runs.
+  api.listen("library-watch", () => emit("library-changed"));
   api.listen("index-error", (msg) => {
     box.hidden = true;
     toast(`Indexing failed: ${msg}`, true);

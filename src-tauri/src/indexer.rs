@@ -21,23 +21,29 @@ pub struct Progress {
 
 pub fn spawn(app: AppHandle, root: PathBuf, recursive: bool) {
     std::thread::spawn(move || {
-        if let Err(e) = run(&app, &root, recursive) {
+        if let Err(e) = run(&app, &root, recursive, false) {
             let _ = app.emit("index-error", e.to_string());
         }
     });
 }
 
-fn run(app: &AppHandle, root: &std::path::Path, recursive: bool) -> prism_core::Result<()> {
+/// Indexes `root`. `quiet` runs (from the folder watcher) report no
+/// progress; the caller tells the UI when something changed. Returns the
+/// number of photos added, changed or removed.
+pub fn run(app: &AppHandle, root: &std::path::Path, recursive: bool, quiet: bool) -> prism_core::Result<usize> {
     let state = app.state::<AppState>();
     let folder = root.to_string_lossy().to_string();
     let emit = |stage, done, total| {
-        let _ = app.emit("index-progress", Progress { folder: folder.clone(), stage, done, total });
+        if !quiet {
+            let _ = app.emit("index-progress", Progress { folder: folder.clone(), stage, done, total });
+        }
     };
 
     emit("scanning", 0, 0);
     let paths = scan::list_media(root, recursive);
     let scanned = scan::scan_files(&paths);
     let results = state.catalog().upsert_many(&scanned)?;
+    let mut changes = results.iter().filter(|r| !matches!(r, Upsert::Unchanged(_))).count();
 
     // Import ratings/keywords/develop from sidecars of new files. Disk work
     // (reading sidecars, checking for deleted files) happens before taking
@@ -69,6 +75,7 @@ fn run(app: &AppHandle, root: &std::path::Path, recursive: bool) -> prism_core::
         }
         // Files and whole sub-folders deleted from disk since the last scan.
         cat.delete_assets(&gone)?;
+        changes += gone.len();
     }
     emit("indexed", scanned.len(), scanned.len());
 
@@ -102,7 +109,7 @@ fn run(app: &AppHandle, root: &std::path::Path, recursive: bool) -> prism_core::
     }
     drop(cat);
     emit("done", total, total);
-    Ok(())
+    Ok(changes)
 }
 
 /// Reads GPS for catalog entries created before positions were stored, in

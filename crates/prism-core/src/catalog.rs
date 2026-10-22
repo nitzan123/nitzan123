@@ -98,6 +98,10 @@ CREATE TABLE IF NOT EXISTS places (
     key  TEXT PRIMARY KEY,
     name TEXT
 );
+CREATE TABLE IF NOT EXISTS roots (
+    path      TEXT PRIMARY KEY,
+    recursive INTEGER NOT NULL DEFAULT 1
+);
 CREATE TABLE IF NOT EXISTS presets (
     id       INTEGER PRIMARY KEY,
     name     TEXT NOT NULL UNIQUE COLLATE NOCASE,
@@ -301,6 +305,35 @@ impl Catalog {
             conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION}"))?;
         }
         Ok(Self { conn })
+    }
+
+    // ------------------------------------------------------------------ roots
+
+    /// Records a folder the user added to the library (watched for changes).
+    pub fn add_root(&self, path: &str, recursive: bool) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO roots(path, recursive) VALUES (?1, ?2) \
+             ON CONFLICT(path) DO UPDATE SET recursive = max(recursive, excluded.recursive)",
+            params![path, recursive],
+        )?;
+        Ok(())
+    }
+
+    /// Library roots, without ones already covered by a recursive parent.
+    pub fn roots(&self) -> Result<Vec<(String, bool)>> {
+        let mut st = self.conn.prepare("SELECT path, recursive FROM roots ORDER BY path")?;
+        let all: Vec<(String, bool)> =
+            st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
+        let recursive: Vec<String> = all.iter().filter(|r| r.1).map(|r| r.0.clone()).collect();
+        Ok(all
+            .into_iter()
+            .filter(|(p, _)| {
+                !recursive.iter().any(|o| {
+                    let o = o.trim_end_matches(['/', '\\']);
+                    o != p.as_str() && p.strip_prefix(o).is_some_and(|rest| rest.starts_with(['/', '\\']))
+                })
+            })
+            .collect())
     }
 
     // ---------------------------------------------------------------- folders
@@ -991,6 +1024,19 @@ fn face_row(r: &Row<'_>) -> rusqlite::Result<FaceRow> {
     })
 }
 
+/// Paths in `folders` that are not inside another path of the list.
+fn top_level(folders: &[String]) -> Vec<&String> {
+    folders
+        .iter()
+        .filter(|f| {
+            !folders.iter().any(|o| {
+                let o = o.trim_end_matches(['/', '\\']);
+                o != f.as_str() && f.strip_prefix(o).is_some_and(|rest| rest.starts_with(['/', '\\']))
+            })
+        })
+        .collect()
+}
+
 /// Brings catalogs created by older versions up to the current columns.
 fn migrate(conn: &Connection) -> Result<()> {
     let has_gps: bool =
@@ -1003,6 +1049,16 @@ fn migrate(conn: &Connection) -> Result<()> {
         )?;
     }
     conn.execute_batch("CREATE INDEX IF NOT EXISTS assets_gps ON assets(gps_lat) WHERE gps_lat IS NOT NULL;")?;
+    // Catalogs from before library roots were recorded: the top-most
+    // folders that hold photos become the roots.
+    let roots: i64 = conn.query_row("SELECT COUNT(*) FROM roots", [], |r| r.get(0))?;
+    if roots == 0 {
+        let mut st = conn.prepare("SELECT path FROM folders")?;
+        let folders: Vec<String> = st.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+        for f in top_level(&folders) {
+            conn.execute("INSERT OR IGNORE INTO roots(path, recursive) VALUES (?1, 1)", [f])?;
+        }
+    }
     Ok(())
 }
 
@@ -1200,6 +1256,28 @@ mod tests {
         // …and so does the background backfill.
         c.set_gps(1, None).unwrap();
         assert_eq!(c.asset(1).unwrap().gps, None);
+    }
+
+    #[test]
+    fn roots_are_recorded_deduplicated_and_derived_for_old_catalogs() {
+        let c = Catalog::open_in_memory().unwrap();
+        c.add_root("/p", true).unwrap();
+        c.add_root("/p/sub", false).unwrap();
+        c.add_root("/q", false).unwrap();
+        c.add_root("/q", true).unwrap();
+        assert_eq!(c.roots().unwrap(), vec![("/p".to_string(), true), ("/q".to_string(), true)]);
+
+        // A catalog with folders but no roots derives the top-level ones.
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("c.db");
+        {
+            let mut c = Catalog::open(&db).unwrap();
+            c.upsert_many(&[in_folder("/a/x", "1.jpg", None, None), in_folder("/a/x/y", "2.jpg", None, None)]).unwrap();
+            c.upsert_many(&[in_folder("/b", "3.jpg", None, None)]).unwrap();
+            c.conn.execute("DELETE FROM roots", []).unwrap();
+        }
+        let c = Catalog::open(&db).unwrap();
+        assert_eq!(c.roots().unwrap(), vec![("/a/x".to_string(), true), ("/b".to_string(), true)]);
     }
 
     #[test]

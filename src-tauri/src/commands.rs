@@ -61,13 +61,22 @@ pub fn add_folder(app: AppHandle, path: String, recursive: bool) -> CmdResult<()
     if !p.is_dir() {
         return Err(format!("not a folder: {path}"));
     }
+    let state = app.state::<AppState>();
+    state.catalog().add_root(&p.to_string_lossy(), recursive).map_err(s)?;
+    app.state::<crate::watcher::Watch>().add(&p, recursive);
     indexer::spawn(app, p, recursive);
     Ok(())
 }
 
+/// Re-indexes one folder (its files only) without changing library roots.
 #[tauri::command]
 pub fn rescan_folder(app: AppHandle, path: String) -> CmdResult<()> {
-    add_folder(app, path, false)
+    let p = PathBuf::from(&path);
+    if !p.is_dir() {
+        return Err(format!("not a folder: {path}"));
+    }
+    indexer::spawn(app, p, false);
+    Ok(())
 }
 
 #[tauri::command]
