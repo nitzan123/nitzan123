@@ -65,6 +65,8 @@ export const api = {
   namePerson: (personId, name) => invoke("name_person", { personId, name }),
   setFaceName: (faceId, name) => invoke("set_face_name", { faceId, name }),
   aiMask: (id, kind) => invoke("ai_mask", { id, kind }),
+  mapPoints: (id, settings, points, toSource) => invoke("map_points", { id, settings, points, toSource }),
+  spotSource: (id, settings, x, y, radius) => invoke("spot_source", { id, settings, x, y, radius }),
   pickFolder: (title) => invoke("plugin:dialog|open", { options: { directory: true, multiple: false, title } }),
   listen: (event, cb) => T.event.listen(event, (e) => cb(e.payload)),
 };

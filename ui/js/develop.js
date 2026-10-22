@@ -26,6 +26,7 @@ export const defaults = () => ({
   vignette: { amount: 0, midpoint: 50, feather: 50 },
   geometry: { rotate90: 0, flipHorizontal: false, straighten: 0, crop: null },
   local: [],
+  spots: [],
   lens: {
     enabled: false, profile: null, distortion: 100, vignetting: 100, ca: 100,
     manualDistortion: 0, manualVignetting: 0, manualCaRed: 0, manualCaBlue: 0,
@@ -461,12 +462,12 @@ let clipboard = null;
  * profile (resolved for that photo's lens/focal/aperture) stay the target's. */
 const pasted = (target) => {
   const c = JSON.parse(JSON.stringify(clipboard));
-  return { ...target, ...c, local: target.local, lens: { ...c.lens, enabled: target.lens.enabled, profile: target.lens.profile } };
+  return { ...target, ...c, local: target.local, spots: target.spots, lens: { ...c.lens, enabled: target.lens.enabled, profile: target.lens.profile } };
 };
 
 function copySettings() {
-  const { local, ...rest } = JSON.parse(JSON.stringify(dev.s));
-  clipboard = rest; // local masks are image-specific (lens profile handled in `pasted`)
+  const { local, spots, ...rest } = JSON.parse(JSON.stringify(dev.s));
+  clipboard = rest; // masks and retouch spots are image-specific (lens profile handled in `pasted`)
   toast("Develop settings copied (without local masks)");
 }
 

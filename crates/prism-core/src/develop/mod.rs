@@ -9,6 +9,7 @@ pub mod auto;
 pub(crate) mod buffer;
 pub mod masks;
 pub mod pipeline;
+pub mod retouch;
 
 use serde::{Deserialize, Serialize};
 
@@ -36,6 +37,8 @@ pub struct DevelopSettings {
     pub geometry: Geometry,
     pub local: Vec<LocalAdjustment>,
     pub lens: crate::lens::LensSettings,
+    /// Heal/clone spots, in source image coordinates.
+    pub spots: Vec<retouch::Spot>,
 }
 
 impl Default for DevelopSettings {
@@ -53,6 +56,7 @@ impl Default for DevelopSettings {
             geometry: Default::default(),
             local: Vec::new(),
             lens: Default::default(),
+            spots: Vec::new(),
         }
     }
 }
@@ -63,6 +67,7 @@ impl DevelopSettings {
         let mut s = self.clone();
         s.version = SETTINGS_VERSION;
         s.local.retain(|l| l.enabled);
+        s.spots.retain(|p| p.enabled);
         s == Self::default()
     }
 }

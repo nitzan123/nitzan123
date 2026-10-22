@@ -297,3 +297,18 @@ label.block { display: flex; flex-direction: column; gap: 4px; margin: 8px 0; }
 .map-popup-thumbs img:hover, .map-popup-thumbs img:focus { outline: 2px solid var(--accent); }
 
 .row.wrap { flex-wrap: wrap; }
+
+/* ------------------------------------------------------ brush / retouch */
+.mask-overlay .capture { pointer-events: all; fill: transparent; }
+.mask-overlay .brush-tint { fill: rgba(229, 83, 75, 0.45); pointer-events: none; }
+.mask-overlay .brush-cursor { fill: none; stroke: #fff; stroke-width: 1.5; pointer-events: none; filter: drop-shadow(0 0 1px #000); }
+.mask-overlay .brush-cursor.erase { stroke-dasharray: 4 3; }
+.mask-overlay .spot { pointer-events: all; cursor: move; fill: rgba(255,255,255,0.08); stroke: #fff; stroke-width: 1.5; filter: drop-shadow(0 0 1px #000); }
+.mask-overlay .spot.active { stroke: var(--accent); stroke-width: 2; }
+.mask-overlay .spot.source { fill: none; stroke: #fff; stroke-dasharray: 4 3; }
+.mask-overlay .spot.off { opacity: 0.4; }
+.mask-overlay .spot-link { stroke: #fff; stroke-width: 1; stroke-dasharray: 3 3; pointer-events: none; }
+.btn.active, .btn[aria-pressed="true"] { background: var(--sel); border-color: var(--accent); }
+.spot-list { list-style: none; margin: 6px 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px; }
+.spot-list li { display: flex; align-items: center; gap: 4px; padding: 2px 6px; border: 1px solid var(--line); border-radius: var(--radius); cursor: pointer; font-size: 12px; }
+.spot-list li.active { border-color: var(--accent); background: var(--sel); }

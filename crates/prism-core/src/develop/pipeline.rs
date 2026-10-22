@@ -36,6 +36,8 @@ pub fn render(src: &LinearImage, s: &DevelopSettings) -> Rgb32FImage {
         h: src.height() as usize,
         px: src.as_raw().chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect(),
     };
+    let mut buf = buf;
+    super::retouch::apply(&mut buf, &s.spots);
     let bitmaps = align_bitmap_masks(&buf, s);
     let buf = crate::lens::apply(buf, &s.lens);
     let mut buf = geometry(buf, &s.geometry);
@@ -296,6 +298,50 @@ fn split_tone(b: &mut Buf, s: &DevelopSettings) {
 /// Bitmap masks cover the uncropped photo; run each through the same lens
 /// geometry and crop/rotate as the image (at reduced size) so it lines up
 /// with the rendered pixels.
+/// Maps normalised points between the source photo and the developed
+/// frame (after lens correction and geometry). `to_source` maps from the
+/// developed frame back to the source; otherwise source → developed, with
+/// `None` for points cropped out. `aspect` is the source width / height.
+pub fn map_points(aspect: f32, s: &DevelopSettings, points: &[[f32; 2]], to_source: bool) -> Vec<Option<[f32; 2]>> {
+    // A coordinate grid pushed through the same transforms as the pixels.
+    let long = 768.0;
+    let (gw, gh) = if aspect >= 1.0 {
+        (long as usize, ((long / aspect) as usize).max(2))
+    } else {
+        (((long * aspect) as usize).max(2), long as usize)
+    };
+    let mut grid = Buf::new(gw, gh);
+    for y in 0..gh {
+        for x in 0..gw {
+            grid.px[y * gw + x] = [(x as f32 + 0.5) / gw as f32, (y as f32 + 0.5) / gh as f32, 1.0];
+        }
+    }
+    let mut lens = s.lens.clone();
+    (lens.vignetting, lens.manual_vignetting, lens.ca, lens.manual_ca_red, lens.manual_ca_blue) =
+        (0.0, 0.0, 0.0, 0.0, 0.0);
+    let d = geometry(crate::lens::apply(grid, &lens), &s.geometry);
+    points
+        .iter()
+        .map(|&[px, py]| {
+            if to_source {
+                let v = d.sample(px * d.w as f32 - 0.5, py * d.h as f32 - 0.5);
+                return Some([v[0], v[1]]);
+            }
+            let (mut best, mut at) = (f32::MAX, 0);
+            for (i, v) in d.px.iter().enumerate() {
+                let e = (v[0] - px).powi(2) + (v[1] - py).powi(2);
+                if e < best {
+                    (best, at) = (e, i);
+                }
+            }
+            // Further than ~2 grid cells from any visible pixel: cropped out.
+            let cell = 2.0 / gw.min(gh) as f32;
+            (best.sqrt() < cell)
+                .then(|| [((at % d.w) as f32 + 0.5) / d.w as f32, ((at / d.w) as f32 + 0.5) / d.h as f32])
+        })
+        .collect()
+}
+
 fn align_bitmap_masks(src: &Buf, s: &DevelopSettings) -> Vec<Option<Buf>> {
     let mut lens_geometry = s.lens.clone();
     lens_geometry.vignetting = 0.0;
@@ -510,6 +556,50 @@ mod tests {
             assert!((w.iter().sum::<f32>() - 1.0).abs() < 1e-4);
         }
         assert!(band_weights(120.0)[3] > 0.99);
+    }
+
+    #[test]
+    fn points_map_both_ways_through_rotation_and_crop() {
+        let mut s = DevelopSettings::default();
+        let same = map_points(1.5, &s, &[[0.25, 0.75]], true)[0].unwrap();
+        assert!((same[0] - 0.25).abs() < 0.01 && (same[1] - 0.75).abs() < 0.01);
+
+        s.geometry.rotate90 = 1; // 90° clockwise
+        s.geometry.crop = Some(CropRect { x: 0.0, y: 0.0, w: 0.5, h: 1.0 });
+        // Developed top-left came from the source's bottom-left.
+        let src = map_points(1.5, &s, &[[0.0, 0.0]], true)[0].unwrap();
+        assert!(src[0] < 0.01 && src[1] > 0.99, "{src:?}");
+        // Round trip for a point that is still visible…
+        let shown = map_points(1.5, &s, &[[0.2, 0.9]], false)[0].unwrap();
+        let back = map_points(1.5, &s, &[shown], true)[0].unwrap();
+        assert!((back[0] - 0.2).abs() < 0.01 && (back[1] - 0.9).abs() < 0.01, "{back:?}");
+        // …and a cropped-out one has no developed position.
+        assert!(map_points(1.5, &s, &[[0.5, 0.1]], false)[0].is_none());
+    }
+
+    #[test]
+    fn brush_mask_and_spots_render() {
+        use crate::develop::masks::Stroke;
+        use crate::develop::retouch::Spot;
+        let mut s = DevelopSettings::default();
+        s.local.push(LocalAdjustment {
+            mask: Mask::Brush {
+                strokes: vec![
+                    Stroke { points: vec![[0.1, 0.5], [0.9, 0.5]], size: 0.1, feather: 0.0, ..Default::default() },
+                    Stroke { erase: true, points: vec![[0.5, 0.5]], size: 0.1, feather: 0.0, ..Default::default() },
+                ],
+            },
+            exposure: 1.0,
+            ..Default::default()
+        });
+        let out = render(&grey(100, 50, 0.1), &s);
+        let v = |x, y| out.get_pixel(x, y).0[0];
+        assert!(v(25, 25) > v(25, 5) + 0.1, "painted band is brighter");
+        assert!((v(50, 25) - v(25, 5)).abs() < 0.01, "erased middle is untouched");
+        assert!(!s.is_identity());
+        s.local.clear();
+        s.spots.push(Spot { enabled: false, ..Default::default() });
+        assert!(s.is_identity(), "disabled spots change nothing");
     }
 
     #[test]

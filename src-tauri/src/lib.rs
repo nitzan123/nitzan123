@@ -78,6 +78,8 @@ pub fn run() {
             commands::name_person,
             commands::set_face_name,
             commands::ai_mask,
+            commands::map_points,
+            commands::spot_source,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Prism Studio");

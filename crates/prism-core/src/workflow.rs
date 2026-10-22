@@ -20,13 +20,15 @@ pub struct Preset {
 }
 
 /// Applies a preset's *look* (tone, colour, detail, effects) to a photo.
-/// Per-photo work — crop/rotation, lens correction and local masks — is
+/// Per-photo work — crop/rotation, lens correction, local masks and
+/// retouch spots — is
 /// kept, so one preset can be applied to a whole shoot.
 pub fn apply_preset(base: &DevelopSettings, preset: &DevelopSettings) -> DevelopSettings {
     DevelopSettings {
         geometry: base.geometry.clone(),
         lens: base.lens.clone(),
         local: base.local.clone(),
+        spots: base.spots.clone(),
         ..preset.clone()
     }
 }

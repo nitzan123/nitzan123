@@ -814,3 +814,54 @@ pub async fn ai_mask(app: AppHandle, id: i64, kind: String) -> CmdResult<prism_c
     .await
     .map_err(s)?
 }
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MappedPoints {
+    /// Source width / height.
+    aspect: f32,
+    points: Vec<Option<[f32; 2]>>,
+}
+
+/// Maps normalised points between the source photo and the developed frame
+/// (see `pipeline::map_points`). Used to place retouch spots.
+#[tauri::command]
+pub async fn map_points(
+    app: AppHandle,
+    id: i64,
+    settings: DevelopSettings,
+    points: Vec<[f32; 2]>,
+    to_source: bool,
+) -> CmdResult<MappedPoints> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let path = state.catalog().asset(id).map_err(s)?.path;
+        let src = state.source(id, Path::new(&path)).map_err(s)?;
+        let aspect = src.width() as f32 / src.height().max(1) as f32;
+        let points = prism_core::develop::pipeline::map_points(aspect, &settings, &points, to_source);
+        Ok(MappedPoints { aspect, points })
+    })
+    .await
+    .map_err(s)?
+}
+
+/// Best place to copy from for a new retouch spot (source coordinates),
+/// judged on the photo with the existing spots applied.
+#[tauri::command]
+pub async fn spot_source(
+    app: AppHandle,
+    id: i64,
+    settings: DevelopSettings,
+    x: f32,
+    y: f32,
+    radius: f32,
+) -> CmdResult<[f32; 2]> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let path = state.catalog().asset(id).map_err(s)?.path;
+        let src = state.source(id, Path::new(&path)).map_err(s)?;
+        Ok(prism_core::develop::retouch::auto_source_in(&src, &settings.spots, x, y, radius))
+    })
+    .await
+    .map_err(s)?
+}

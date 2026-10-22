@@ -25,6 +25,93 @@ pub enum Mask {
     /// as a base64 grayscale PNG. The pipeline runs it through the same lens
     /// and geometry transforms as the image so it stays aligned.
     Bitmap { label: String, width: u32, height: u32, data: String },
+    /// Painted by hand: strokes applied in order (paint adds, erase removes).
+    Brush { strokes: Vec<Stroke> },
+}
+
+/// One brush stroke. Points are normalised to the image like the other
+/// masks; `size` is the brush radius as a fraction of the long edge.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Stroke {
+    pub erase: bool,
+    pub size: f32,
+    /// 0 (hard edge) … 100 (fully soft).
+    pub feather: f32,
+    /// Strength 0…100.
+    pub flow: f32,
+    pub points: Vec<[f32; 2]>,
+}
+
+impl Default for Stroke {
+    fn default() -> Self {
+        Self { erase: false, size: 0.05, feather: 50.0, flow: 100.0, points: Vec::new() }
+    }
+}
+
+/// Rasterises brush strokes into a `w × h` 0…1 plane by stamping soft
+/// discs along each stroke.
+pub fn rasterize(strokes: &[Stroke], w: usize, h: usize) -> Vec<f32> {
+    let mut out = vec![0f32; w * h];
+    let long = w.max(h) as f32;
+    for st in strokes {
+        let r = (st.size * long).max(0.5);
+        let inner = r * (1.0 - st.feather.clamp(0.0, 100.0) / 100.0);
+        let flow = st.flow.clamp(0.0, 100.0) / 100.0;
+        let pts: Vec<[f32; 2]> = st.points.iter().map(|p| [p[0] * w as f32, p[1] * h as f32]).collect();
+        if pts.is_empty() {
+            continue;
+        }
+        let mut stamps = Vec::new();
+        for (i, p) in pts.iter().enumerate() {
+            match pts.get(i + 1) {
+                Some(q) => {
+                    let d = ((q[0] - p[0]).powi(2) + (q[1] - p[1]).powi(2)).sqrt();
+                    let n = (d / (r * 0.25).max(0.5)).ceil().max(1.0) as usize;
+                    stamps.extend((0..n).map(|k| {
+                        let t = k as f32 / n as f32;
+                        [p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t]
+                    }));
+                }
+                None => stamps.push(*p),
+            }
+        }
+        // This stroke's coverage (max of its stamps, over its bounding box),
+        // merged once so a stroke doesn't build up where stamps overlap.
+        let span = |v: f32, max: usize| (v.floor().max(0.0) as usize).min(max);
+        let bx0 = span(stamps.iter().map(|p| p[0]).fold(f32::MAX, f32::min) - r, w);
+        let bx1 = span(stamps.iter().map(|p| p[0]).fold(f32::MIN, f32::max) + r + 1.0, w);
+        let by0 = span(stamps.iter().map(|p| p[1]).fold(f32::MAX, f32::min) - r, h);
+        let by1 = span(stamps.iter().map(|p| p[1]).fold(f32::MIN, f32::max) + r + 1.0, h);
+        if bx0 >= bx1 || by0 >= by1 {
+            continue;
+        }
+        let bw = bx1 - bx0;
+        let mut cover = vec![0f32; bw * (by1 - by0)];
+        for [cx, cy] in stamps {
+            let (x0, x1) = (span(cx - r, w).max(bx0), span(cx + r + 1.0, w).min(bx1));
+            let (y0, y1) = (span(cy - r, h).max(by0), span(cy + r + 1.0, h).min(by1));
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    let d = ((x as f32 + 0.5 - cx).powi(2) + (y as f32 + 0.5 - cy).powi(2)).sqrt();
+                    if d >= r {
+                        continue;
+                    }
+                    let v = if d <= inner { 1.0 } else { 1.0 - smoothstep(inner, r, d) } * flow;
+                    let c = &mut cover[(y - by0) * bw + (x - bx0)];
+                    *c = c.max(v);
+                }
+            }
+        }
+        for y in by0..by1 {
+            for x in bx0..bx1 {
+                let c = cover[(y - by0) * bw + (x - bx0)];
+                let o = &mut out[y * w + x];
+                *o = if st.erase { *o * (1.0 - c) } else { *o + (1.0 - *o) * c };
+            }
+        }
+    }
+    out
 }
 
 impl Mask {
@@ -68,8 +155,11 @@ pub fn evaluate(mask: &Mask, img: &Buf) -> Vec<f32> {
             None => vec![0.0; w * h],
         };
     }
+    if let Mask::Brush { strokes } = mask {
+        return rasterize(strokes, w, h);
+    }
     match *mask {
-        Mask::Bitmap { .. } => unreachable!(),
+        Mask::Bitmap { .. } | Mask::Brush { .. } => unreachable!(),
         Mask::Full => vec![1.0; w * h],
         Mask::Linear { x0, y0, x1, y1 } => {
             let (dx, dy) = ((x1 - x0) * w as f32, (y1 - y0) * h as f32);
