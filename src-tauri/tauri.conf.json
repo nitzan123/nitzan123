@@ -39,30 +39,6 @@
     "license": "MIT",
     "licenseFile": "../LICENSE",
     "longDescription": "Prism Studio is a photo manager and non-destructive RAW editor: catalog, ratings and keywords, full-resolution RAW development with lens correction, local adjustments with brush and AI masks, heal/clone retouching, on-device face recognition and smart search, folder/calendar/map views, and batch export with metadata.",
-    "fileAssociations": [
-      {
-        "ext": [
-          "jpg",
-          "jpeg",
-          "png",
-          "tif",
-          "tiff",
-          "webp",
-          "cr2",
-          "cr3",
-          "nef",
-          "arw",
-          "dng",
-          "orf",
-          "rw2",
-          "raf",
-          "pef",
-          "srw"
-        ],
-        "name": "Photo",
-        "role": "Viewer"
-      }
-    ],
     "windows": {
       "digestAlgorithm": "sha256",
       "webviewInstallMode": {
@@ -76,21 +52,6 @@
     "macOS": {
       "minimumSystemVersion": "11.0",
       "hardenedRuntime": true
-    },
-    "linux": {
-      "deb": {
-        "depends": [
-          "libwebkit2gtk-4.1-0",
-          "libgtk-3-0"
-        ],
-        "section": "graphics"
-      },
-      "rpm": {
-        "depends": [
-          "webkit2gtk4.1",
-          "gtk3"
-        ]
-      }
     }
   }
 }

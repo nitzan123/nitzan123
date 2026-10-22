@@ -88,8 +88,6 @@ release asset.
 - Windows: the WebView2 runtime is installed if missing (online
   bootstrapper). The `.exe` installer installs per user without admin
   rights; the `.msi` is for per-machine installs (e.g. managed PCs).
-- File associations for common photo and RAW formats, so Prism Studio
-  appears under "Open with".
 
 ## Building an installer locally
 
