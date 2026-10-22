@@ -56,6 +56,9 @@ export const api = {
   textApply: (ids, options) => invoke("text_apply", { ids, options }),
   textEdit: (ids, subject, place) => invoke("text_edit", { ids, subject, place }),
   textRemove: (ids) => invoke("text_remove", { ids }),
+  textConfirm: (ids) => invoke("text_confirm", { ids }),
+  locationHistory: () => invoke("location_history"),
+  importLocationHistory: (path) => invoke("import_location_history", { path }),
   replacePlace: (old, newName) => invoke("replace_place", { old, new: newName }),
   lensDbStatus: () => invoke("lens_db_status"),
   lensDbDownload: () => invoke("lens_db_download"),
@@ -72,6 +75,8 @@ export const api = {
   aiMask: (id, kind) => invoke("ai_mask", { id, kind }),
   mapPoints: (id, settings, points, toSource) => invoke("map_points", { id, settings, points, toSource }),
   spotSource: (id, settings, x, y, radius) => invoke("spot_source", { id, settings, x, y, radius }),
+  pickFile: (title, name, extensions) =>
+    invoke("plugin:dialog|open", { options: { multiple: false, title, filters: [{ name, extensions }] } }),
   pickFolder: (title) => invoke("plugin:dialog|open", { options: { directory: true, multiple: false, title } }),
   listen: (event, cb) => T.event.listen(event, (e) => cb(e.payload)),
 };

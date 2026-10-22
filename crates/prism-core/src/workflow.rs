@@ -455,6 +455,7 @@ pub(crate) mod tests_support {
             gps: None,
             has_text: false,
             needs_place: false,
+            to_check: false,
         }
     }
 }
@@ -492,6 +493,7 @@ mod tests {
             gps: None,
             has_text: false,
             needs_place: false,
+            to_check: false,
         }
     }
 

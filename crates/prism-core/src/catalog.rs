@@ -102,6 +102,12 @@ CREATE TABLE IF NOT EXISTS roots (
     path      TEXT PRIMARY KEY,
     recursive INTEGER NOT NULL DEFAULT 1
 );
+CREATE TABLE IF NOT EXISTS track_points (
+    t   INTEGER NOT NULL,
+    lat REAL NOT NULL,
+    lon REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS track_points_t ON track_points(t);
 CREATE TABLE IF NOT EXISTS presets (
     id       INTEGER PRIMARY KEY,
     name     TEXT NOT NULL UNIQUE COLLATE NOCASE,
@@ -146,13 +152,37 @@ pub struct Asset {
     pub has_text: bool,
     /// Has text whose place is still empty (no GPS / lookup failed).
     pub needs_place: bool,
+    /// Its place or date was inferred and is waiting to be confirmed.
+    pub to_check: bool,
 }
 
-const ASSET_COLUMNS: &str = "a.id, a.path, f.path, a.file_name, a.ext, a.size, a.mtime, a.width, a.height, \
+/// SQL: the photo has text but no place yet.
+macro_rules! place_missing_sql {
+    () => {
+        "(json_extract(a.develop, '$.text') IS NOT NULL \
+     AND trim(coalesce(json_extract(a.develop, '$.text.place'), '')) = '')"
+    };
+}
+/// SQL: the photo's place or date was inferred and hasn't been confirmed.
+macro_rules! to_check_sql {
+    () => {
+        "coalesce((json_extract(a.develop, '$.text') IS NOT NULL AND ( \
+     (trim(coalesce(json_extract(a.develop, '$.text.place'), '')) != '' \
+      AND json_extract(a.develop, '$.text.placeFrom') IN ('nearby', 'phone', 'timeline')) \
+  OR (trim(coalesce(json_extract(a.develop, '$.text.date'), '')) != '' \
+      AND json_extract(a.develop, '$.text.dateFrom') IN ('fileName', 'fileDate')))), 0)"
+    };
+}
+
+const ASSET_COLUMNS: &str = concat!(
+    "a.id, a.path, f.path, a.file_name, a.ext, a.size, a.mtime, a.width, a.height, \
     a.taken_at, a.camera_make, a.camera_model, a.lens, a.iso, a.f_number, a.exposure_time, a.focal_length, \
     a.orientation, a.rating, a.color_label, a.tagged, a.caption, a.develop IS NOT NULL, a.gps_lat, a.gps_lon, \
-    json_extract(a.develop, '$.text') IS NOT NULL, \
-    json_extract(a.develop, '$.text') IS NOT NULL AND trim(coalesce(json_extract(a.develop, '$.text.place'), '')) = ''";
+    json_extract(a.develop, '$.text') IS NOT NULL, ",
+    place_missing_sql!(),
+    ", ",
+    to_check_sql!()
+);
 
 fn asset_from_row(r: &Row<'_>) -> rusqlite::Result<Asset> {
     Ok(Asset {
@@ -185,6 +215,7 @@ fn asset_from_row(r: &Row<'_>) -> rusqlite::Result<Asset> {
         },
         has_text: r.get(25)?,
         needs_place: r.get(26)?,
+        to_check: r.get(27)?,
     })
 }
 
@@ -479,11 +510,9 @@ impl Catalog {
         }
         if let Some(n) = q.needs_place {
             sql += if n {
-                " AND json_extract(a.develop, '$.text') IS NOT NULL \
-                 AND trim(coalesce(json_extract(a.develop, '$.text.place'), '')) = ''"
+                concat!(" AND (", place_missing_sql!(), " OR ", to_check_sql!(), ")")
             } else {
-                " AND NOT (json_extract(a.develop, '$.text') IS NOT NULL \
-                 AND trim(coalesce(json_extract(a.develop, '$.text.place'), '')) = '')"
+                concat!(" AND NOT (", place_missing_sql!(), " OR ", to_check_sql!(), ")")
             };
         }
         if let Some(d) = q.dated {
@@ -774,6 +803,91 @@ impl Catalog {
         Ok(())
     }
 
+    // ----------------------------------------------------------- locations
+
+    /// Replaces the imported location history with `points` (naive time,
+    /// lat, lon). Returns how many were stored.
+    pub fn set_track(&mut self, points: &[(i64, f64, f64)]) -> Result<usize> {
+        let tx = self.conn.transaction()?;
+        tx.execute("DELETE FROM track_points", [])?;
+        {
+            let mut st = tx.prepare("INSERT INTO track_points(t, lat, lon) VALUES (?1, ?2, ?3)")?;
+            for (t, la, lo) in points {
+                st.execute(params![t, la, lo])?;
+            }
+        }
+        tx.commit()?;
+        Ok(points.len())
+    }
+
+    pub fn track(&self) -> Result<Vec<crate::locate::RefPoint>> {
+        let mut st = self.conn.prepare("SELECT t, lat, lon FROM track_points ORDER BY t")?;
+        let rows = st.query_map([], |r| {
+            Ok(crate::locate::RefPoint { t: r.get(0)?, lat: r.get(1)?, lon: r.get(2)?, camera: None, asset_id: None })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// `(points, first, last)` of the imported location history.
+    pub fn track_summary(&self) -> Result<(i64, Option<i64>, Option<i64>)> {
+        Ok(self.conn.query_row("SELECT COUNT(*), MIN(t), MAX(t) FROM track_points", [], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+        })?)
+    }
+
+    /// Dated photos without GPS: the ones whose place can be estimated.
+    /// Dates read from file names (when a photo was sent) are left out.
+    pub fn gps_targets(&self) -> Result<Vec<crate::locate::Target>> {
+        let mut st = self.conn.prepare(
+            "SELECT id, taken_at, camera_model, file_name FROM assets WHERE gps_lat IS NULL AND taken_at IS NOT NULL",
+        )?;
+        let rows = st.query_map([], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?, r.get::<_, String>(3)?))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (id, taken, camera, name) = row?;
+            if crate::metadata::date_from_filename(&name).as_deref() == Some(taken.as_str()) {
+                continue;
+            }
+            if let Some(t) = crate::locate::naive_secs(&taken) {
+                out.push(crate::locate::Target { id, t, camera });
+            }
+        }
+        Ok(out)
+    }
+
+    /// Photos whose own metadata has both a capture time and GPS: the
+    /// evidence for estimating where the other photos were taken.
+    pub fn gps_refs(&self) -> Result<Vec<crate::locate::RefPoint>> {
+        let mut st = self.conn.prepare(
+            "SELECT id, taken_at, camera_model, gps_lat, gps_lon, file_name FROM assets \
+             WHERE gps_lat IS NOT NULL AND gps_lon IS NOT NULL AND taken_at IS NOT NULL",
+        )?;
+        let rows = st.query_map([], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, Option<String>>(2)?,
+                r.get::<_, f64>(3)?,
+                r.get::<_, f64>(4)?,
+                r.get::<_, String>(5)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (id, taken, camera, lat, lon, name) = row?;
+            // A date from the file name is when it was sent, not taken.
+            if crate::metadata::date_from_filename(&name).as_deref() == Some(taken.as_str()) {
+                continue;
+            }
+            if let Some(t) = crate::locate::naive_secs(&taken) {
+                out.push(crate::locate::RefPoint { t, lat, lon, camera, asset_id: Some(id) });
+            }
+        }
+        Ok(out)
+    }
+
     /// Renames a place in the text of every photo that uses it (e.g. the
     /// district "Lince" → "Lima"). Returns the ids that changed.
     pub fn replace_place(&self, old: &str, new: &str) -> Result<Vec<i64>> {
@@ -787,6 +901,7 @@ impl Catalog {
             let mut s: DevelopSettings = serde_json::from_str(&json)?;
             if let Some(t) = s.text.as_mut() {
                 t.place = new.trim().to_string();
+                t.place_from = crate::locate::Source::Typed;
                 self.set_develop(id, Some(&s))?;
                 changed.push(id);
             }
@@ -1447,6 +1562,39 @@ mod tests {
         assert!(needs[0].has_text && needs[0].needs_place);
         assert_eq!(c.replace_place("Lince", "Lima").unwrap(), vec![a]);
         assert_eq!(c.develop(a).unwrap().unwrap().text.unwrap().place, "Lima");
+
+        // Text saved before sources were recorded (no placeFrom/dateFrom).
+        c.conn
+            .execute(
+                "UPDATE assets SET develop = '{\"text\":{\"place\":\"Lima\",\"date\":\"01.10.2026\"}}' WHERE id = ?1",
+                [a],
+            )
+            .unwrap();
+        let legacy = c.asset(a).unwrap();
+        assert!(legacy.has_text && !legacy.to_check && !legacy.needs_place);
+        assert_eq!(c.search(&SearchQuery { needs_place: Some(false), ..Default::default() }).unwrap().len(), 2);
+
+        // An estimated place shows up for review until confirmed.
+        let mut est = with_text("Cusco");
+        est.text.as_mut().unwrap().place_from = crate::locate::Source::Phone;
+        c.set_develop(d, Some(&est)).unwrap();
+        let review = |c: &Catalog| {
+            c.search(&SearchQuery { needs_place: Some(true), ..Default::default() })
+                .unwrap()
+                .iter()
+                .map(|x| x.id)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(review(&c), vec![b, d]);
+        assert!(c.asset(d).unwrap().to_check && !c.asset(d).unwrap().needs_place);
+        est.text.as_mut().unwrap().confirm();
+        c.set_develop(d, Some(&est)).unwrap();
+        assert_eq!(review(&c), vec![b]);
+
+        let mut c = c;
+        assert_eq!(c.set_track(&[(100, 1.0, 2.0), (200, 3.0, 4.0)]).unwrap(), 2);
+        assert_eq!(c.track_summary().unwrap(), (2, Some(100), Some(200)));
+        assert_eq!(c.track().unwrap()[1].lat, 3.0);
 
         c.rename_asset(a, "/p/renamed.jpg").unwrap();
         let ra = c.asset(a).unwrap();

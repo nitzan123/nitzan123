@@ -140,10 +140,19 @@ tokens as rename). Available from Manage (batch) and Develop.
 - The photo's own data comes first: camera date and GPS. Without them, the
   date is taken from the file name (WhatsApp `2026-10-20 at 21.32.51`, phone
   `IMG_20261020_…`), optionally from the file date.
-- Photos still missing a place get a red **📍 place?** badge and a
-  "missing place" filter; type the place in the right panel (works for many
-  selected photos at once). Text you typed is never overwritten by a later
-  run. "Rename … everywhere" fixes a place on all photos (e.g. Lince → Lima).
+- **Photos without GPS** (most cameras) get a place worked out from other
+  evidence, and are marked **? check** with an explanation:
+  - a photo with GPS from the same camera a few minutes apart;
+  - a **phone photo** taken at about the same time — the camera's clock
+    offset (e.g. still on home time, +8 h) is detected automatically from
+    all its photos;
+  - an imported **Google Maps location history** (Timeline export; on-device
+    `Timeline.json`, phone `location-history.json` or Takeout `Records.json`).
+  Dates read from file names (WhatsApp: when it was *sent*) are marked too.
+- **📍 Review places** groups the photos needing attention by time: type the
+  place once per group or press ✓ if the estimate is right. Photos with no
+  place at all are red. Typed or confirmed text is never overwritten.
+  "Rename … everywhere" fixes a place on all photos (e.g. Lince → Lima).
 - Fine-tune a single photo in Develop → Text on photo.
 
 ## File formats

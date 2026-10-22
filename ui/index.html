@@ -45,7 +45,7 @@
           <div class="filter-row" id="label-filter" aria-label="Colour label"></div>
           <label class="check"><input type="checkbox" id="tagged-filter" /> Tagged only</label>
           <label class="check"><input type="checkbox" id="developed-filter" /> Developed only</label>
-          <label class="check"><input type="checkbox" id="missing-filter" /> 📍 Missing place only</label>
+          <label class="check"><input type="checkbox" id="missing-filter" /> 📍 Places to review only</label>
           <div class="date-row">
             <label>Taken from<input type="date" id="date-from" /></label>
             <label>to<input type="date" id="date-to" /></label>
@@ -203,6 +203,13 @@
       <h3 id="text-title">Date &amp; place on photos</h3>
       <div id="text-form"></div>
       <menu><button value="ok" class="btn primary">Add to photos</button><button value="cancel" class="btn">Cancel</button></menu>
+    </form>
+  </dialog>
+  <dialog id="review-dialog" aria-labelledby="review-title">
+    <form method="dialog" class="review">
+      <h3 id="review-title">📍 Review places</h3>
+      <div id="review-body"></div>
+      <menu><button value="ok" class="btn">Done</button></menu>
     </form>
   </dialog>
   <dialog id="preset-dialog" aria-labelledby="preset-title">

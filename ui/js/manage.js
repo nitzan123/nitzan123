@@ -7,7 +7,7 @@ import { openExportDialog } from "./export.js";
 import { aiAnalyzed, open as openAi } from "./ai.js";
 import { renderTree, folderTree, calendarTree } from "./tree.js";
 import * as map from "./map.js";
-import { propsSection } from "./text.js";
+import { propsSection, openReview } from "./text.js";
 
 let smartMode = false;
 let folderExpanded = null; // Set of expanded folder keys (roots open at first)
@@ -41,14 +41,16 @@ export async function reload({ keepFocus = true } = {}) {
   $("count").textContent = `${store.assets.length} photo${store.assets.length === 1 ? "" : "s"}`;
   for (const b of ["manage-export", "manage-preset", "manage-rename", "manage-text"]) $(b).disabled = store.assets.length === 0;
   if (store.query.needsPlace && !store.assets.length) {
-    toast("All photos have a place ✓");
+    toast("Nothing left to review ✓");
     return patchQuery({ needsPlace: undefined });
   }
   const missing = store.assets.filter((a) => a.needsPlace).length;
+  const check = store.assets.filter((a) => a.toCheck && !a.needsPlace).length;
   const chip = $("manage-missing");
-  chip.hidden = !missing && !store.query.needsPlace;
-  chip.classList.toggle("active", !!store.query.needsPlace);
-  chip.textContent = store.query.needsPlace ? `📍 ${missing} missing place ✕` : `📍 ${missing} missing place`;
+  chip.hidden = !missing && !check;
+  chip.classList.toggle("warn", !missing);
+  chip.textContent = `📍 Review places (${missing + check})`;
+  chip.title = [missing && `${missing} without a place`, check && `${check} estimated — please check`].filter(Boolean).join(" · ");
   $("breadcrumb").textContent = store.scope;
   $("empty").hidden = store.layout === "map" || store.assets.length > 0 || !!hasFilters();
   relayout(true);
@@ -204,7 +206,7 @@ function buildFilters() {
   $("tagged-filter").onchange = (e) => patchQuery({ tagged: e.target.checked || undefined });
   $("developed-filter").onchange = (e) => patchQuery({ developed: e.target.checked || undefined });
   $("missing-filter").onchange = (e) => patchQuery({ needsPlace: e.target.checked || undefined });
-  $("manage-missing").onclick = () => patchQuery({ needsPlace: store.query.needsPlace ? undefined : true });
+  $("manage-missing").onclick = () => openReview();
   $("date-from").onchange = (e) => patchQuery({ dateFrom: e.target.value || undefined, calendarKey: undefined, dated: undefined });
   $("date-to").onchange = (e) => patchQuery({ dateTo: e.target.value || undefined, calendarKey: undefined, dated: undefined });
   $("camera-filter").oninput = (e) => {
@@ -308,7 +310,8 @@ function cell(a) {
       el("img", { src: urls.thumb(a), loading: "lazy", alt: "", draggable: "false" }),
       a.tagged ? el("span", { class: "tagmark", title: "Tagged" }, "✓") : null,
       a.developed ? el("span", { class: "devmark", title: "Developed" }, "◐") : null,
-      a.needsPlace ? el("span", { class: "placemark", title: "Text without a place: select it and type the place on the right" }, "📍 place?") : null),
+      a.needsPlace ? el("span", { class: "placemark", title: "Text without a place: select it and type the place on the right" }, "📍 place?")
+        : a.toCheck ? el("span", { class: "placemark check", title: "Place or date was estimated — please check (right panel or 📍 Review places)" }, "? check") : null),
     el("div", { class: "meta" },
       el("div", { class: "name" }, a.fileName),
       el("div", { class: "badges" },

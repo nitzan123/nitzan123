@@ -11,6 +11,7 @@ pub mod error;
 pub mod geocode;
 pub mod imaging;
 pub mod lens;
+pub mod locate;
 pub mod metadata;
 pub mod overlay;
 pub mod raw;

@@ -75,6 +75,12 @@ pub struct TextOverlay {
     pub color: TextColor,
     pub italic: bool,
     pub bold: bool,
+    /// Where `place` came from; estimates are flagged for checking.
+    pub place_from: crate::locate::Source,
+    /// Why the place was estimated (e.g. "from a phone photo 4 min apart").
+    pub place_note: String,
+    /// Where `date` came from.
+    pub date_from: crate::locate::Source,
 }
 
 impl Default for TextOverlay {
@@ -88,6 +94,9 @@ impl Default for TextOverlay {
             color: TextColor::Auto,
             italic: true,
             bold: false,
+            place_from: crate::locate::Source::None,
+            place_note: String::new(),
+            date_from: crate::locate::Source::None,
         }
     }
 }
@@ -100,6 +109,22 @@ impl TextOverlay {
 
     pub fn is_empty(&self) -> bool {
         self.parts().is_empty()
+    }
+
+    /// The place or date was inferred and hasn't been confirmed.
+    pub fn needs_check(&self) -> bool {
+        (!self.place.trim().is_empty() && self.place_from.is_estimate())
+            || (!self.date.trim().is_empty() && self.date_from.is_estimate())
+    }
+
+    /// Accepts the inferred place and date as correct.
+    pub fn confirm(&mut self) {
+        if self.place_from.is_estimate() {
+            self.place_from = crate::locate::Source::Typed;
+        }
+        if self.date_from.is_estimate() {
+            self.date_from = crate::locate::Source::Typed;
+        }
     }
 
     /// Draws the text onto `img` (no-op when empty).

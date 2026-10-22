@@ -12,6 +12,8 @@ use prism_core::develop::{
 use prism_core::embed::{encode_with_meta, ExportMeta};
 use prism_core::geocode::cache_key;
 use prism_core::geocode::PlaceDetail;
+use prism_core::locate::{self, Estimate, Source};
+use prism_core::metadata::date_from_filename;
 use prism_core::metadata::read_exif;
 use prism_core::overlay::{format_date, DateFormat, TextOverlay};
 use prism_core::workflow::file_date;
@@ -21,6 +23,7 @@ use prism_core::workflow::{
 };
 use prism_core::{xmp, Asset, Catalog, DevelopSettings, SearchQuery};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -362,6 +365,12 @@ impl Default for TextApply {
 #[serde(rename_all = "camelCase")]
 pub struct TextApplyResult {
     applied: usize,
+    /// Places worked out from other photos or the location history.
+    estimated: usize,
+    /// Dates taken from file names or file dates.
+    date_to_check: usize,
+    /// e.g. detected camera clock offsets.
+    notes: Vec<String>,
     /// Photos whose place is still empty (no GPS, or lookup failed).
     need_place: usize,
     no_date: usize,
@@ -398,40 +407,88 @@ pub async fn text_apply(app: AppHandle, ids: Vec<i64>, options: TextApply) -> Cm
         let state = app.state::<AppState>();
         let mut res = TextApplyResult::default();
         let total = ids.len();
-        for (i, &id) in ids.iter().enumerate() {
-            let (asset, mut settings) = {
+        let assets: Vec<Asset> = {
+            let cat = state.catalog();
+            ids.iter().map(|&id| cat.asset(id)).collect::<prism_core::Result<_>>().map_err(s)?
+        };
+        // Where photos without GPS were probably taken, from photos with GPS
+        // (same camera or a phone) and the imported location history.
+        let estimates: HashMap<i64, Estimate> = if options.place {
+            // Every dated photo without GPS takes part (so camera clock
+            // offsets are detected from all of a camera's photos); only the
+            // selected ones are written.
+            let (candidates, refs, track) = {
                 let cat = state.catalog();
-                (cat.asset(id).map_err(s)?, cat.develop(id).map_err(s)?.unwrap_or_default())
+                (cat.gps_targets().map_err(s)?, cat.gps_refs().map_err(s)?, cat.track().map_err(s)?)
             };
+            let selected: std::collections::HashSet<i64> = ids.iter().copied().collect();
+            let (found, notes) = locate::estimate(&candidates, &refs, &track);
+            res.notes = notes;
+            found.into_iter().filter(|e| selected.contains(&e.id)).map(|e| (e.id, e)).collect()
+        } else {
+            HashMap::new()
+        };
+        for (i, asset) in assets.iter().enumerate() {
+            let id = asset.id;
+            let mut settings = state.catalog().develop(id).map_err(s)?.unwrap_or_default();
             let old = settings.text.take().unwrap_or_default();
-            let mut t = TextOverlay { subject: old.subject.clone(), ..options.style.clone() };
-            t.date = if options.date {
-                let file_date = || options.use_file_date.then(|| file_date(asset.mtime));
-                asset
-                    .taken_at
-                    .clone()
-                    .or_else(file_date)
-                    .and_then(|d| format_date(&d, options.date_format))
-                    .unwrap_or(old.date.clone())
-            } else {
-                String::new()
+            let typed = |from: Source, value: &str| {
+                // Text from before sources were recorded counts as typed.
+                !value.trim().is_empty() && matches!(from, Source::Typed | Source::None)
             };
-            t.place = if !options.place {
-                String::new()
-            } else if !old.place.trim().is_empty() {
-                old.place.clone() // typed or corrected by the user
+            let mut t = TextOverlay { subject: old.subject.clone(), ..options.style.clone() };
+
+            // Date: typed > camera > file name > file date.
+            (t.date, t.date_from) = if !options.date {
+                (String::new(), Source::None)
+            } else if typed(old.date_from, &old.date) {
+                (old.date.clone(), Source::Typed)
             } else {
-                match asset.gps.map(|g| town(&state, g, &options.place_language, options.place_detail)) {
-                    Some(Ok(Some(p))) => p,
-                    Some(Err(())) => {
-                        res.lookup_failed = true;
-                        String::new()
+                let fmt = |d: &str| format_date(d, options.date_format);
+                let from_name = date_from_filename(&asset.file_name);
+                match asset.taken_at.as_deref() {
+                    Some(d) if from_name.as_deref() == Some(d) => (fmt(d).unwrap_or_default(), Source::FileName),
+                    Some(d) => (fmt(d).unwrap_or_default(), Source::Photo),
+                    None if options.use_file_date => {
+                        (fmt(&file_date(asset.mtime)).unwrap_or_default(), Source::FileDate)
                     }
-                    _ => String::new(),
+                    None => (String::new(), Source::None),
                 }
+            };
+
+            // Place: typed > GPS > estimate.
+            let mut lookup = |gps: [f64; 2]| match town(&state, gps, &options.place_language, options.place_detail) {
+                Ok(p) => p.unwrap_or_default(),
+                Err(()) => {
+                    res.lookup_failed = true;
+                    String::new()
+                }
+            };
+            (t.place, t.place_from, t.place_note) = if !options.place {
+                (String::new(), Source::None, String::new())
+            } else if typed(old.place_from, &old.place) {
+                (old.place.clone(), Source::Typed, String::new())
+            } else if let Some(g) = asset.gps {
+                (lookup(g), Source::Photo, String::new())
+            } else if let Some(e) =
+                estimates.get(&id).map(|e| (e, lookup([e.lat, e.lon]))).filter(|(_, p)| !p.is_empty())
+            {
+                let (e, place) = e;
+                // Only a same-camera neighbour minutes apart, with the photos
+                // around it agreeing, is taken as is; the rest is flagged.
+                let from = if e.confident && e.source == Source::Nearby { Source::Typed } else { e.source };
+                res.estimated += from.is_estimate() as usize;
+                (place, from, e.note.clone())
+            } else if !old.place.trim().is_empty() && old.place_from.is_estimate() {
+                // Nothing new (or offline): keep the earlier estimate.
+                res.estimated += 1;
+                (old.place.clone(), old.place_from, old.place_note.clone())
+            } else {
+                (String::new(), Source::None, String::new())
             };
             res.need_place += (options.place && t.place.is_empty()) as usize;
             res.no_date += (options.date && t.date.is_empty()) as usize;
+            res.date_to_check += (t.date_from.is_estimate() && !t.date.is_empty()) as usize;
             settings.text = Some(t);
             {
                 let cat = state.catalog();
@@ -442,6 +499,65 @@ pub async fn text_apply(app: AppHandle, ids: Vec<i64>, options: TextApply) -> Cm
             let _ = app.emit("text-progress", TextProgress { done: i + 1, total });
         }
         Ok(res)
+    })
+    .await
+    .map_err(s)?
+}
+
+/// Accepts the inferred places and dates of these photos as correct.
+#[tauri::command]
+pub fn text_confirm(state: State<'_, AppState>, ids: Vec<i64>) -> CmdResult<()> {
+    let cat = state.catalog();
+    for &id in &ids {
+        if let Some(mut settings) = cat.develop(id).map_err(s)? {
+            if let Some(t) = settings.text.as_mut() {
+                t.confirm();
+                cat.set_develop(id, Some(&settings)).map_err(s)?;
+            }
+        }
+    }
+    sync_sidecars(&cat, &ids);
+    Ok(())
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackSummary {
+    points: i64,
+    /// `YYYY-MM-DD` of the first and last point.
+    from: Option<String>,
+    to: Option<String>,
+}
+
+fn track_summary(cat: &Catalog) -> CmdResult<TrackSummary> {
+    let (points, a, b) = cat.track_summary().map_err(s)?;
+    let day = |t: Option<i64>| t.map(|t| file_date(t)[..10].to_string());
+    Ok(TrackSummary { points, from: day(a), to: day(b) })
+}
+
+#[tauri::command]
+pub fn location_history(state: State<'_, AppState>) -> CmdResult<TrackSummary> {
+    track_summary(&state.catalog())
+}
+
+/// Imports a Google Maps location-history export (replacing any earlier
+/// import). Only the time and position of each point are kept.
+#[tauri::command]
+pub async fn import_location_history(app: AppHandle, path: String) -> CmdResult<TrackSummary> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let file = std::fs::File::open(&path).map_err(s)?;
+        let json: serde_json::Value = serde_json::from_reader(std::io::BufReader::new(file))
+            .map_err(|e| format!("not a location-history file: {e}"))?;
+        let points = locate::parse_timeline(&json);
+        if points.is_empty() {
+            return Err(
+                "No locations found in this file. Export it from Google Maps → Timeline (see the help text).".into()
+            );
+        }
+        let state = app.state::<AppState>();
+        let mut cat = state.catalog();
+        cat.set_track(&points).map_err(s)?;
+        track_summary(&cat)
     })
     .await
     .map_err(s)?
@@ -465,6 +581,8 @@ pub fn text_edit(
         }
         if let Some(v) = &place {
             t.place = v.trim().to_string();
+            t.place_from = Source::Typed;
+            t.place_note.clear();
         }
         cat.set_develop(id, Some(&settings)).map_err(s)?;
     }
