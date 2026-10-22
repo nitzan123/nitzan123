@@ -1,0 +1,59 @@
+name: Windows build
+
+# Builds the Windows installer on every push and publishes it at a fixed
+# address, always the latest version:
+#   https://github.com/<owner>/<repo>/releases/download/windows-latest/PrismStudio-setup.exe
+# Unsigned (personal use): Windows shows "Windows protected your PC" on the
+# first run; click "More info" → "Run anyway".
+
+on:
+  push:
+    branches: ["**"]
+    paths-ignore: ["**.md", "docs/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: windows-build
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.97.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: windows-installer
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Build installer
+        working-directory: src-tauri
+        run: npx -y @tauri-apps/cli@2.12.4 build --bundles nsis
+
+      - name: Publish to the windows-latest release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          exe=$(ls target/release/bundle/nsis/*-setup.exe | head -1)
+          cp "$exe" PrismStudio-setup.exe
+          notes="Latest Windows build of ${GITHUB_REF_NAME} at ${GITHUB_SHA::7}. Unsigned: on first run click 'More info' → 'Run anyway'."
+          if gh release view windows-latest >/dev/null 2>&1; then
+            gh release upload windows-latest PrismStudio-setup.exe --clobber
+            gh release edit windows-latest --notes "$notes" --target "$GITHUB_SHA"
+          else
+            gh release create windows-latest PrismStudio-setup.exe --prerelease \
+              --title "Prism Studio — latest Windows build" --notes "$notes" --target "$GITHUB_SHA"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PrismStudio-setup
+          path: PrismStudio-setup.exe
+          retention-days: 14

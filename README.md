@@ -150,6 +150,15 @@ tokens as rename). Available from Manage (batch) and Develop.
 | RAW | CR2, NEF, ARW, DNG, ORF, RW2, RAF, PEF, SRW and [many more](crates/prism-core/src/raw.rs) via rawloader. CR3 has a thumbnail preview only. |
 | Sidecar | `photo.ext.xmp`, which holds `xmp:Rating`, `xmp:Label`, `dc:subject` and `dc:description`. Lightroom, darktable and digiKam can read these. Develop settings are stored in the `prism:` namespace. If `photo.ext.xmp` was written by another program (for example darktable's edit history), Prism never overwrites it: it reads the rating and keywords from it and writes its own data to `photo.ext.prism.xmp` instead. |
 
+## Get it (Windows)
+
+Every push builds a fresh Windows installer at a fixed link:
+<https://github.com/nitzan123/nitzan123/releases/download/windows-latest/PrismStudio-setup.exe>
+
+Run it (no admin rights needed). It's unsigned, so the first time Windows
+shows "Windows protected your PC": click **More info → Run anyway**. To
+update, download and run it again; your library and edits are kept.
+
 ## Build and run
 
 Requirements: Rust (stable) and the
