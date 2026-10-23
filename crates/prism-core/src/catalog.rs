@@ -107,6 +107,10 @@ CREATE TABLE IF NOT EXISTS roots (
 CREATE TABLE IF NOT EXISTS excluded (
     path TEXT PRIMARY KEY
 );
+CREATE TABLE IF NOT EXISTS settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS track_points (
     t   INTEGER NOT NULL,
     lat REAL NOT NULL,
@@ -425,6 +429,20 @@ impl Catalog {
         }
         tx.commit()?;
         Ok(RemovedFolder { photos: ids.len(), unwatched: dropped.into_iter().map(|(r, _)| r).collect() })
+    }
+
+    /// Small app-wide values kept with the library (e.g. which file formats
+    /// existing folders were last scanned with).
+    pub fn setting(&self, key: &str) -> Result<Option<String>> {
+        Ok(self.conn.query_row("SELECT value FROM settings WHERE key = ?1", [key], |r| r.get(0)).optional()?)
+    }
+
+    pub fn set_setting(&self, key: &str, value: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO settings(key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![key, value],
+        )?;
+        Ok(())
     }
 
     /// Folders removed from the library inside a root that is still watched.
@@ -1557,6 +1575,15 @@ mod tests {
         assert_eq!((r.photos, r.unwatched), (1, vec!["/home".to_string()]));
         assert!(c.excluded().unwrap().is_empty());
         assert_eq!(c.search(&SearchQuery::default()).unwrap().len(), 3);
+    }
+
+    #[test]
+    fn settings_round_trip() {
+        let c = Catalog::open_in_memory().unwrap();
+        assert_eq!(c.setting("formats").unwrap(), None);
+        c.set_setting("formats", "1").unwrap();
+        c.set_setting("formats", "2").unwrap();
+        assert_eq!(c.setting("formats").unwrap().as_deref(), Some("2"));
     }
 
     #[test]

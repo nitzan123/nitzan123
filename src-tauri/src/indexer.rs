@@ -145,3 +145,28 @@ pub fn spawn_gps_backfill(app: AppHandle) {
         }
     });
 }
+
+/// After an upgrade that added file types (e.g. HEIC), re-scans every
+/// library folder once in the background so photos the old version skipped
+/// appear without the user doing anything.
+pub fn spawn_format_rescan(app: AppHandle) {
+    std::thread::spawn(move || {
+        let state = app.state::<AppState>();
+        let current = prism_core::imaging::FORMATS_VERSION.to_string();
+        let (seen, roots) = {
+            let cat = state.catalog();
+            (cat.setting("formats").ok().flatten(), cat.roots().unwrap_or_default())
+        };
+        if seen.as_deref() == Some(current.as_str()) {
+            return;
+        }
+        let mut changes = 0;
+        for (root, recursive) in roots {
+            changes += run(&app, std::path::Path::new(&root), recursive, true).unwrap_or(0);
+        }
+        let _ = state.catalog().set_setting("formats", &current);
+        if changes > 0 {
+            let _ = app.emit("library-watch", changes);
+        }
+    });
+}

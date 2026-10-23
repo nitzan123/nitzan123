@@ -27,6 +27,7 @@ pub fn run() {
             let cache = app.path().app_cache_dir()?;
             app.manage(AppState::open(&data, &cache)?);
             indexer::spawn_gps_backfill(app.handle().clone());
+            indexer::spawn_format_rescan(app.handle().clone());
             app.manage(watcher::Watch::start(app.handle()));
             // `prism-studio <folder | photo>…`: folders join the library; a
             // photo is shown once its folder is indexed.

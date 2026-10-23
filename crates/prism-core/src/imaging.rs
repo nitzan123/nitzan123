@@ -17,6 +17,10 @@ pub const HEIF_EXTENSIONS: &[&str] = &["heic", "heif", "hif", "avif"];
 /// JPEG XL. The decoder applies the codestream orientation itself.
 pub const JXL_EXTENSIONS: &[&str] = &["jxl"];
 
+/// Bumped whenever a release learns new file types, so libraries scanned
+/// by an older version are re-scanned once to pick up files it skipped.
+pub const FORMATS_VERSION: u32 = 2;
+
 pub fn ext_of(path: &Path) -> String {
     path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase()
 }
