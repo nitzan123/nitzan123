@@ -64,6 +64,43 @@ function wireProgress() {
   });
 }
 
+// ------------------------------------------------------------- UI zoom
+
+const ZOOM_KEY = "prism.zoom";
+let zoom = 1;
+
+/** Sets the interface scale (remembered). Laptops with Windows display
+ * scaling leave ~1280 px of room, so the first start there is a bit smaller. */
+function setZoom(z, remember = true) {
+  zoom = Math.round(Math.min(1.5, Math.max(0.6, z)) * 20) / 20;
+  api.setZoom(zoom).catch(() => {});
+  if (remember) {
+    try {
+      localStorage.setItem(ZOOM_KEY, String(zoom));
+    } catch {
+      /* storage unavailable */
+    }
+  }
+}
+
+function initZoom() {
+  let saved = null;
+  try {
+    saved = Number(localStorage.getItem(ZOOM_KEY)) || null;
+  } catch {
+    /* storage unavailable */
+  }
+  setZoom(saved ?? (window.screen.availWidth < 1500 ? 0.85 : 1), false);
+  document.addEventListener("keydown", (e) => {
+    if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+    const step = { "=": 0.05, "+": 0.05, "-": -0.05, _: -0.05 }[e.key];
+    if (step) setZoom(zoom + step);
+    else if (e.key === "0") setZoom(1);
+    else return;
+    e.preventDefault();
+  });
+}
+
 function wireKeys() {
   document.addEventListener("keydown", (e) => {
     const t = e.target;
@@ -117,6 +154,7 @@ document.getElementById("quick-search").addEventListener("input", (e) => {
 on("asset-developed", (id) => urls.invalidate(id));
 
 wireProgress();
+initZoom();
 wireKeys();
 manage.init();
 view.init();

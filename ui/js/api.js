@@ -22,6 +22,7 @@ export const api = {
   removeFolder: (path) => invoke("remove_folder", { path }),
   folders: () => invoke("folders"),
   takePendingOpen: () => invoke("take_pending_open"),
+  setZoom: (scale) => invoke("set_zoom", { scale }),
   assetByPath: (path) => invoke("asset_by_path", { path }),
   calendar: () => invoke("calendar"),
   search: (query) => invoke("search", { query }),

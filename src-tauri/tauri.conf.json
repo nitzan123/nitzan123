@@ -11,11 +11,12 @@
     "windows": [
       {
         "title": "Prism Studio",
-        "width": 1440,
-        "height": 900,
+        "width": 1280,
+        "height": 800,
         "minWidth": 960,
         "minHeight": 600,
-        "theme": "Dark"
+        "theme": "Dark",
+        "maximized": true
       }
     ],
     "security": {

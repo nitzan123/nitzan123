@@ -18,13 +18,16 @@ const DATE_FORMATS = [["dotted", "23.09.2026"], ["numeric", "23/09/2026"], ["lon
 const COLORS = [["auto", "Automatic"], ["black", "Black"], ["white", "White"]];
 
 const DEFAULTS = {
-  date: true, dateFormat: "dotted", place: true, placeLanguage: "", placeDetail: "city", useFileDate: false,
+  date: true, dateFormat: "dotted", place: true, placeLanguage: "", placeDetail: "venue", useFileDate: false,
   position: "bottomLeft", size: 2.5, color: "auto", italic: true, bold: false,
 };
 
 function prefs() {
   try {
-    return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(PREFS_KEY) || "{}") };
+    const p = { ...DEFAULTS, ...JSON.parse(localStorage.getItem(PREFS_KEY) || "{}") };
+    // "Town only" was the default before venues existed: move to the new one.
+    if (!p.venueDefault) (p.placeDetail = p.placeDetail === "city" ? "venue" : p.placeDetail), (p.venueDefault = true);
+    return p;
   } catch {
     return { ...DEFAULTS };
   }
@@ -84,7 +87,7 @@ async function openDialog() {
       el("label", { class: "check" }, el("input", { type: "checkbox", id: "tx-date", checked: p.date }), "Date"),
       select("tx-date-format", DATE_FORMATS, p.dateFormat),
       el("label", { class: "check" }, el("input", { type: "checkbox", id: "tx-place", checked: p.place }), "Place (from GPS)"),
-      select("tx-place-detail", [["city", "Town only"], ["cityCountry", "Town, country"]], p.placeDetail),
+      select("tx-place-detail", [["venue", "Exact place, town (museum, park…)"], ["city", "Town only"], ["cityCountry", "Town, country"]], p.placeDetail),
       el("label", { for: "tx-lang" }, "Place names"),
       select("tx-lang", [["", "Local language"], ["en", "English"], ["he", "Hebrew"], ["es", "Spanish"]], p.placeLanguage),
       el("label", { for: "tx-position" }, "Position"),
@@ -113,7 +116,7 @@ async function openDialog() {
     position: $("tx-position").value, color: $("tx-color").value, size: Number($("tx-size").value),
     italic: $("tx-italic").checked, bold: $("tx-bold").checked, useFileDate: $("tx-file-date").checked,
   };
-  savePrefs(v);
+  savePrefs({ ...v, venueDefault: true });
   if (!ok) return;
   await apply(ids, v);
 }
@@ -129,12 +132,13 @@ async function apply(ids, v) {
     changed(ids);
     const parts = [`Text added to ${res.applied}`];
     if (res.estimated) parts.push(`${res.estimated} places estimated (? check)`);
+    if (res.venues) parts.push(`${res.venues} exact places from the map (? check)`);
     if (res.needPlace) parts.push(`${res.needPlace} without a place (📍)`);
     if (res.dateToCheck) parts.push(`${res.dateToCheck} dates from file names (? check)`);
     if (res.noDate) parts.push(`${res.noDate} without a date`);
     if (res.lookupFailed) parts.push("place lookup failed for some (offline?) — run it again later");
     parts.push(...res.notes);
-    toast(parts.join(" · "), res.needPlace > 0 || res.estimated > 0 || res.lookupFailed);
+    toast(parts.join(" · "), res.needPlace > 0 || res.estimated > 0 || res.venues > 0 || res.lookupFailed);
     return res;
   } catch (e) {
     toast(String(e), true);
@@ -309,7 +313,7 @@ export async function propsSection(asset, ids) {
     datalist("tx-recent-subject", "subject"), datalist("tx-recent-place", "place"),
     subject, place,
   ];
-  const NOTES = { nearby: "estimated from a nearby photo", phone: "estimated from a phone photo", timeline: "estimated from your location history" };
+  const NOTES = { nearby: "estimated from a nearby photo", phone: "estimated from a phone photo", timeline: "estimated from your location history", venue: "nearest named place on the map to the photo's GPS" };
   if (n === 1 && t?.place && NOTES[t.placeFrom]) {
     kids.push(el("p", { class: "est-note" }, `≈ ${t.placeNote || NOTES[t.placeFrom]}`,
       el("button", { class: "btn small", onclick: () => confirm(ids) }, "✓ Correct")));
@@ -392,7 +396,7 @@ export function developSection(ctx) {
     const size = el("input", { type: "range", min: 1.5, max: 6, step: 0.25, value: t.size });
     size.oninput = () => ctx.change((s) => (s.text.size = Number(size.value)));
     size.onchange = ctx.commit;
-    const est = { nearby: 1, phone: 1, timeline: 1 }[t.placeFrom];
+    const est = { nearby: 1, phone: 1, timeline: 1, venue: 1 }[t.placeFrom];
     const placeField = field("place", "Place (e.g. Lima)", "place");
     placeField.addEventListener("change", () => {
       ctx.change((s) => ((s.text.placeFrom = "typed"), (s.text.placeNote = "")));

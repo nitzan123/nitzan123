@@ -10,7 +10,6 @@ use prism_core::develop::{
     render_to_rgb8,
 };
 use prism_core::embed::{encode_with_meta, ExportMeta};
-use prism_core::geocode::cache_key;
 use prism_core::geocode::PlaceDetail;
 use prism_core::locate::{self, Estimate, Source};
 use prism_core::metadata::date_from_filename;
@@ -368,7 +367,7 @@ impl Default for TextApply {
             date_format: DateFormat::Dotted,
             place: true,
             place_language: String::new(),
-            place_detail: PlaceDetail::City,
+            place_detail: PlaceDetail::Venue,
             use_file_date: false,
         }
     }
@@ -380,6 +379,8 @@ pub struct TextApplyResult {
     applied: usize,
     /// Places worked out from other photos or the location history.
     estimated: usize,
+    /// Places named after the nearest venue on the map (to check).
+    venues: usize,
     /// Dates taken from file names or file dates.
     date_to_check: usize,
     /// e.g. detected camera clock offsets.
@@ -401,9 +402,10 @@ struct TextProgress {
 /// Town for coordinates: catalog cache, then OpenStreetMap. `Err` when the
 /// lookup failed (offline); `Ok(None)` when there is no town there.
 fn town(state: &AppState, [lat, lon]: [f64; 2], language: &str, detail: PlaceDetail) -> Result<Option<String>, ()> {
-    let key = format!("{}|{language}|{detail:?}", cache_key(lat, lon));
+    let key = format!("{}|{language}|{detail:?}", detail.cache_key(lat, lon));
     if let Ok(Some(cached)) = state.catalog().place(&key) {
-        return Ok(cached);
+        // Names cached before alternate-language parts were dropped.
+        return Ok(cached.map(|p| prism_core::geocode::primary_name(&p).to_string()));
     }
     let place = state.geocoder.lookup(lat, lon, language, detail).map_err(|_| ())?;
     let _ = state.catalog().set_place(&key, place.as_deref());
@@ -470,21 +472,35 @@ pub async fn text_apply(app: AppHandle, ids: Vec<i64>, options: TextApply) -> Cm
             };
 
             // Place: typed > GPS > estimate.
-            let mut lookup = |gps: [f64; 2]| match town(&state, gps, &options.place_language, options.place_detail) {
-                Ok(p) => p.unwrap_or_default(),
-                Err(()) => {
-                    res.lookup_failed = true;
-                    String::new()
-                }
-            };
+            let mut lookup =
+                |gps: [f64; 2], detail: PlaceDetail| match town(&state, gps, &options.place_language, detail) {
+                    Ok(p) => p.unwrap_or_default(),
+                    Err(()) => {
+                        res.lookup_failed = true;
+                        String::new()
+                    }
+                };
+            // A venue only from the photo's own GPS: on an estimated
+            // position it would be a guess on a guess.
+            let estimate_detail =
+                if options.place_detail == PlaceDetail::Venue { PlaceDetail::City } else { options.place_detail };
             (t.place, t.place_from, t.place_note) = if !options.place {
                 (String::new(), Source::None, String::new())
             } else if typed(old.place_from, &old.place) {
                 (old.place.clone(), Source::Typed, String::new())
             } else if let Some(g) = asset.gps {
-                (lookup(g), Source::Photo, String::new())
+                let place = lookup(g, options.place_detail);
+                if options.place_detail == PlaceDetail::Venue
+                    && !place.is_empty()
+                    && place != lookup(g, PlaceDetail::City)
+                {
+                    res.venues += 1;
+                    (place, Source::Venue, "nearest named place on the map to the photo's GPS".to_string())
+                } else {
+                    (place, Source::Photo, String::new())
+                }
             } else if let Some(e) =
-                estimates.get(&id).map(|e| (e, lookup([e.lat, e.lon]))).filter(|(_, p)| !p.is_empty())
+                estimates.get(&id).map(|e| (e, lookup([e.lat, e.lon], estimate_detail))).filter(|(_, p)| !p.is_empty())
             {
                 let (e, place) = e;
                 // Only a same-camera neighbour minutes apart, with the photos
@@ -1081,6 +1097,12 @@ pub async fn spot_source(
     })
     .await
     .map_err(s)?
+}
+
+/// Scales the whole interface, like browser zoom (Ctrl + / Ctrl − / Ctrl 0).
+#[tauri::command]
+pub fn set_zoom(window: tauri::WebviewWindow, scale: f64) -> CmdResult<()> {
+    window.set_zoom(scale.clamp(0.5, 2.0)).map_err(s)
 }
 
 /// A photo the OS asked us to open before the UI was listening (once).

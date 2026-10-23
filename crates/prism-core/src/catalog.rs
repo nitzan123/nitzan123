@@ -177,7 +177,7 @@ macro_rules! to_check_sql {
     () => {
         "coalesce((json_extract(a.develop, '$.text') IS NOT NULL AND ( \
      (trim(coalesce(json_extract(a.develop, '$.text.place'), '')) != '' \
-      AND json_extract(a.develop, '$.text.placeFrom') IN ('nearby', 'phone', 'timeline')) \
+      AND json_extract(a.develop, '$.text.placeFrom') IN ('nearby', 'phone', 'timeline', 'venue')) \
   OR (trim(coalesce(json_extract(a.develop, '$.text.date'), '')) != '' \
       AND json_extract(a.develop, '$.text.dateFrom') IN ('fileName', 'fileDate')))), 0)"
     };

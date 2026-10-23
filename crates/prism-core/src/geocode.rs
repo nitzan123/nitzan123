@@ -59,10 +59,29 @@ impl Geocoder {
 
     /// Like [`Geocoder::reverse`] with a choice of detail.
     pub fn lookup(&self, lat: f64, lon: f64, language: &str, detail: PlaceDetail) -> Result<Option<String>> {
-        let key = format!("{}|{language}|{detail:?}", cache_key(lat, lon));
+        let key = format!("{}|{language}|{detail:?}", detail.cache_key(lat, lon));
         if let Some(hit) = self.memo.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
             return Ok(hit.clone());
         }
+        let place = match detail {
+            PlaceDetail::CityCountry => format_place(&self.fetch(lat, lon, language, 10)?),
+            PlaceDetail::City => format_locality(&self.fetch(lat, lon, language, 10)?),
+            // The town comes from the city-level lookup (cached per ~100 m,
+            // and named the same way as on photos without a venue); the
+            // venue from the building-level one.
+            PlaceDetail::Venue => {
+                let town = self.lookup(lat, lon, language, PlaceDetail::City)?;
+                let venue = format_venue(&self.fetch(lat, lon, language, 18)?);
+                join_venue(venue, town)
+            }
+        };
+        self.memo.lock().unwrap_or_else(|e| e.into_inner()).insert(key, place.clone());
+        Ok(place)
+    }
+
+    /// One Nominatim reverse request at the given zoom (10 = city,
+    /// 18 = building).
+    fn fetch(&self, lat: f64, lon: f64, language: &str, zoom: u8) -> Result<Value> {
         if let Some(t) = *self.offline_since.lock().unwrap_or_else(|e| e.into_inner()) {
             if t.elapsed() < OFFLINE_BACKOFF {
                 return Err(Error::Network("offline (recent lookup failed)".into()));
@@ -75,7 +94,7 @@ impl Geocoder {
             .query("format", "jsonv2")
             .query("lat", &format!("{lat:.5}"))
             .query("lon", &format!("{lon:.5}"))
-            .query("zoom", "10"); // city level
+            .query("zoom", &zoom.to_string());
         if !language.is_empty() {
             req = req.query("accept-language", language);
         }
@@ -89,13 +108,7 @@ impl Geocoder {
             }
         };
         *self.offline_since.lock().unwrap_or_else(|e| e.into_inner()) = None;
-        let json: Value = serde_json::from_reader(resp.into_reader())?;
-        let place = match detail {
-            PlaceDetail::CityCountry => format_place(&json),
-            PlaceDetail::City => format_locality(&json),
-        };
-        self.memo.lock().unwrap_or_else(|e| e.into_inner()).insert(key, place.clone());
-        Ok(place)
+        Ok(serde_json::from_reader(resp.into_reader())?)
     }
 
     fn throttle(&self) {
@@ -110,7 +123,8 @@ impl Geocoder {
     }
 }
 
-/// Coordinates rounded to 3 decimals (~110 m) — the cache granularity.
+/// Coordinates rounded to 3 decimals (~110 m) — the cache granularity for
+/// town names.
 pub fn cache_key(lat: f64, lon: f64) -> String {
     format!("{lat:.3},{lon:.3}")
 }
@@ -147,6 +161,58 @@ pub enum PlaceDetail {
     City,
     /// `Chinchero, Perú`
     CityCountry,
+    /// `Museo Larco, Lima`: the nearest named place on the map (museum,
+    /// park, temple, café…), then the town; just the town when nothing
+    /// named is there.
+    Venue,
+}
+
+impl PlaceDetail {
+    /// Cache key for these coordinates: ~100 m cells for towns, ~10 m for
+    /// venues (the next building over is a different place).
+    pub fn cache_key(self, lat: f64, lon: f64) -> String {
+        match self {
+            PlaceDetail::Venue => format!("{lat:.4},{lon:.4}"),
+            _ => cache_key(lat, lon),
+        }
+    }
+}
+
+/// First of several official names OSM joins in one tag, e.g. Jerusalem's
+/// `ירושלים | القدس` or `Bozen;Bolzano`.
+pub fn primary_name(name: &str) -> &str {
+    name.split([';', '|']).next().unwrap_or(name).trim()
+}
+
+fn text(v: Option<&Value>) -> Option<&str> {
+    v.and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty())
+}
+
+/// Name of the place itself from a building-level (`zoom=18`) Nominatim
+/// response: the object found, or the named place that contains it. Roads,
+/// towns and administrative areas are not venues.
+pub fn format_venue(json: &Value) -> Option<String> {
+    if json.get("error").is_some() {
+        return None;
+    }
+    let category = text(json.get("category")).unwrap_or("");
+    let own = text(json.get("name"))
+        .filter(|_| !matches!(category, "highway" | "place" | "boundary" | "landuse" | "railway" | "waterway"));
+    let addr = json.get("address");
+    const KEYS: [&str; 12] = [
+        "tourism", "historic", "leisure", "amenity", "building", "shop", "craft", "office", "man_made", "natural",
+        "aeroway", "club",
+    ];
+    own.or_else(|| KEYS.iter().find_map(|k| text(addr.and_then(|a| a.get(*k))))).map(|n| primary_name(n).to_string())
+}
+
+/// "Venue, Town", without repeating a town that is also the venue's name.
+fn join_venue(venue: Option<String>, town: Option<String>) -> Option<String> {
+    match (venue, town) {
+        (Some(v), Some(t)) if v.eq_ignore_ascii_case(&t) => Some(t),
+        (Some(v), Some(t)) => Some(format!("{v}, {t}")),
+        (v, t) => v.or(t),
+    }
 }
 
 /// Just the town or city, without administrative prefixes such as
@@ -170,6 +236,7 @@ pub fn format_locality(json: &Value) -> Option<String> {
         "Commune de ",
         "District of ",
     ];
+    let name = primary_name(name);
     let trimmed = PREFIXES.iter().find_map(|p| name.strip_prefix(p)).unwrap_or(name);
     Some(trimmed.trim().to_string())
 }
@@ -202,6 +269,7 @@ mod tests {
             Some("Chinchero")
         );
         assert_eq!(format_locality(&serde_json::json!({"error": "Unable to geocode"})), None);
+        assert_eq!(format_locality(&j(serde_json::json!({"city": "ירושלים | القدس"}))).as_deref(), Some("ירושלים"));
     }
 
     #[test]
@@ -213,6 +281,30 @@ mod tests {
         let v = json!({"address": {"country": "Iceland"}});
         assert_eq!(format_place(&v).as_deref(), Some("Iceland"));
         assert_eq!(format_place(&json!({"error": "Unable to geocode"})), None);
+    }
+
+    #[test]
+    fn venue_is_the_named_place_not_the_street() {
+        // Shapes of real responses (Lima, Machu Picchu, Cusco).
+        let museum = json!({"category": "tourism", "name": "Museo Larco",
+            "address": {"tourism": "Museo Larco", "road": "Avenida Simón Bolivar", "city": "Pueblo Libre"}});
+        assert_eq!(format_venue(&museum).as_deref(), Some("Museo Larco"));
+        let temple = json!({"category": "amenity", "name": "Templo de las Tres Ventanas",
+            "address": {"amenity": "Templo de las Tres Ventanas", "city": "Machupicchu"}});
+        assert_eq!(format_venue(&temple).as_deref(), Some("Templo de las Tres Ventanas"));
+        let bench = json!({"category": "amenity", "name": "", "address": {"road": "Hauqaypata", "city": "Cuzco"}});
+        assert_eq!(format_venue(&bench), None);
+        let street = json!({"category": "highway", "name": "Avenida Larco", "address": {"road": "Avenida Larco"}});
+        assert_eq!(format_venue(&street), None);
+        let inside = json!({"category": "building", "name": "", "address": {"leisure": "Parque Isaac Rabin"}});
+        assert_eq!(format_venue(&inside).as_deref(), Some("Parque Isaac Rabin"));
+
+        let s = |v: &str| Some(v.to_string());
+        assert_eq!(join_venue(s("Museo Larco"), s("Lima")), s("Museo Larco, Lima"));
+        assert_eq!(join_venue(None, s("Lima")), s("Lima"));
+        assert_eq!(join_venue(s("Cusco"), s("Cusco")), s("Cusco"));
+        assert_eq!(join_venue(s("Museo Larco"), None), s("Museo Larco"));
+        assert_ne!(PlaceDetail::Venue.cache_key(-12.0727, -77.0709), PlaceDetail::Venue.cache_key(-12.0737, -77.0709));
     }
 
     #[test]

@@ -41,6 +41,7 @@ pub fn run() {
             commands::add_folder,
             commands::rescan_folder,
             commands::remove_folder,
+            commands::set_zoom,
             commands::folders,
             commands::calendar,
             commands::presets,

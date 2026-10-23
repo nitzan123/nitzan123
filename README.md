@@ -138,11 +138,18 @@ tokens as rename). Available from Manage (batch) and Develop.
 
 **Text on photos** ("Vicuña, Chinchero, 01.10.2026"):
 - Select photos → **📝 Date & place…** → one click adds a line of text to all
-  of them: what/where (typed by you), the town from the photo's GPS
-  (OpenStreetMap, e.g. "Distrito de Cusco" → "Cusco") and the date in the
+  of them: what/where (typed by you), the place from the photo's GPS
+  (OpenStreetMap: the nearest named place and the town, e.g. "Museo Larco,
+  Lima"; "Distrito de Cusco" → "Cusco") and the date in the
   format you choose (default `23.09.2026`). Italic, bottom left or centre,
   colour picked automatically (or black/white); wraps at commas on narrow
   photos.
+- The exact place (museum, park, temple…) is the nearest named object on the
+  map to the photo's GPS, so it is marked "? check": GPS drift can pick the
+  building next door. Places estimated for photos without GPS use the town
+  only. "Town only" and "Town, country" are still available.
+- Ctrl + / Ctrl − / Ctrl 0 make the whole interface bigger, smaller or
+  normal (remembered); on small laptop screens it starts slightly smaller.
 - The photo's own data comes first: camera date and GPS. Without them, the
   date is taken from the file name (WhatsApp `2026-10-20 at 21.32.51`, phone
   `IMG_20261020_…`), optionally from the file date.
