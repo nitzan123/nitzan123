@@ -145,9 +145,11 @@ tokens as rename). Available from Manage (batch) and Develop.
   colour picked automatically (or black/white); wraps at commas on narrow
   photos.
 - The exact place (museum, park, temple…) is the nearest named object on the
-  map to the photo's GPS, so it is marked "? check": GPS drift can pick the
-  building next door. Places estimated for photos without GPS use the town
-  only. "Town only" and "Town, country" are still available.
+  map to the photo's GPS. It is accepted as is, so everything can be
+  exported straight away; GPS drift occasionally picks the building next
+  door, so a quick look before exporting is worthwhile (fix it in the Place
+  box). Places estimated for photos without GPS use the town only and stay
+  marked "? check". "Town only" and "Town, country" are still available.
 - Ctrl + / Ctrl − / Ctrl 0 make the whole interface bigger, smaller or
   normal (remembered); on small laptop screens it starts slightly smaller.
 - The photo's own data comes first: camera date and GPS. Without them, the

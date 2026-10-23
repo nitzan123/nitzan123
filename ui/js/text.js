@@ -132,13 +132,13 @@ async function apply(ids, v) {
     changed(ids);
     const parts = [`Text added to ${res.applied}`];
     if (res.estimated) parts.push(`${res.estimated} places estimated (? check)`);
-    if (res.venues) parts.push(`${res.venues} exact places from the map (? check)`);
+    if (res.venues) parts.push(`${res.venues} exact places from the map`);
     if (res.needPlace) parts.push(`${res.needPlace} without a place (📍)`);
     if (res.dateToCheck) parts.push(`${res.dateToCheck} dates from file names (? check)`);
     if (res.noDate) parts.push(`${res.noDate} without a date`);
     if (res.lookupFailed) parts.push("place lookup failed for some (offline?) — run it again later");
     parts.push(...res.notes);
-    toast(parts.join(" · "), res.needPlace > 0 || res.estimated > 0 || res.venues > 0 || res.lookupFailed);
+    toast(parts.join(" · "), res.needPlace > 0 || res.estimated > 0 || res.lookupFailed);
     return res;
   } catch (e) {
     toast(String(e), true);
@@ -313,7 +313,7 @@ export async function propsSection(asset, ids) {
     datalist("tx-recent-subject", "subject"), datalist("tx-recent-place", "place"),
     subject, place,
   ];
-  const NOTES = { nearby: "estimated from a nearby photo", phone: "estimated from a phone photo", timeline: "estimated from your location history", venue: "nearest named place on the map to the photo's GPS" };
+  const NOTES = { nearby: "estimated from a nearby photo", phone: "estimated from a phone photo", timeline: "estimated from your location history" };
   if (n === 1 && t?.place && NOTES[t.placeFrom]) {
     kids.push(el("p", { class: "est-note" }, `≈ ${t.placeNote || NOTES[t.placeFrom]}`,
       el("button", { class: "btn small", onclick: () => confirm(ids) }, "✓ Correct")));
@@ -396,7 +396,7 @@ export function developSection(ctx) {
     const size = el("input", { type: "range", min: 1.5, max: 6, step: 0.25, value: t.size });
     size.oninput = () => ctx.change((s) => (s.text.size = Number(size.value)));
     size.onchange = ctx.commit;
-    const est = { nearby: 1, phone: 1, timeline: 1, venue: 1 }[t.placeFrom];
+    const est = { nearby: 1, phone: 1, timeline: 1 }[t.placeFrom];
     const placeField = field("place", "Place (e.g. Lima)", "place");
     placeField.addEventListener("change", () => {
       ctx.change((s) => ((s.text.placeFrom = "typed"), (s.text.placeNote = "")));

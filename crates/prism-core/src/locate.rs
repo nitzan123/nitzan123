@@ -36,18 +36,16 @@ pub enum Source {
     FileName,
     /// Date from the file's modified time.
     FileDate,
-    /// The nearest named place (museum, park…) to the photo's own GPS: the
-    /// position is exact, but GPS drift can pick the building next door.
+    /// The nearest named place (museum, park…) to the photo's own GPS.
+    /// Accepted as is (the user can still correct it); GPS drift can
+    /// occasionally pick the building next door.
     Venue,
 }
 
 impl Source {
     /// Needs a human look: anything inferred rather than read or typed.
     pub fn is_estimate(self) -> bool {
-        matches!(
-            self,
-            Source::Nearby | Source::Phone | Source::Timeline | Source::FileName | Source::FileDate | Source::Venue
-        )
+        matches!(self, Source::Nearby | Source::Phone | Source::Timeline | Source::FileName | Source::FileDate)
     }
 }
 

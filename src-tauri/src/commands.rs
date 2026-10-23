@@ -379,7 +379,7 @@ pub struct TextApplyResult {
     applied: usize,
     /// Places worked out from other photos or the location history.
     estimated: usize,
-    /// Places named after the nearest venue on the map (to check).
+    /// Places named after the nearest venue on the map.
     venues: usize,
     /// Dates taken from file names or file dates.
     date_to_check: usize,
@@ -495,7 +495,7 @@ pub async fn text_apply(app: AppHandle, ids: Vec<i64>, options: TextApply) -> Cm
                     && place != lookup(g, PlaceDetail::City)
                 {
                     res.venues += 1;
-                    (place, Source::Venue, "nearest named place on the map to the photo's GPS".to_string())
+                    (place, Source::Venue, String::new())
                 } else {
                     (place, Source::Photo, String::new())
                 }
