@@ -39,6 +39,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::add_folder,
             commands::rescan_folder,
+            commands::remove_folder,
             commands::folders,
             commands::calendar,
             commands::presets,

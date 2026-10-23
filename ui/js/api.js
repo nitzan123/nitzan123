@@ -19,6 +19,7 @@ export const urls = {
 export const api = {
   addFolder: (path, recursive = true) => invoke("add_folder", { path, recursive }),
   rescanFolder: (path) => invoke("rescan_folder", { path }),
+  removeFolder: (path) => invoke("remove_folder", { path }),
   folders: () => invoke("folders"),
   takePendingOpen: () => invoke("take_pending_open"),
   assetByPath: (path) => invoke("asset_by_path", { path }),

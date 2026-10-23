@@ -76,6 +76,16 @@ impl Watch {
             }
         }
     }
+
+    /// Stops watching a folder that left the library.
+    pub fn remove(&self, root: &Path) {
+        if !self.watched.lock().unwrap_or_else(|e| e.into_inner()).remove(root) {
+            return;
+        }
+        if let Some(w) = self.watcher.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+            let _ = w.unwatch(root);
+        }
+    }
 }
 
 fn process(app: &AppHandle, jobs: Vec<Job>) {

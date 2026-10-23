@@ -83,6 +83,13 @@ fn parse(path: &Path) -> Option<exif::Exif> {
     if let Some(e) = tolerant(Reader::new().continue_on_error(true).read_from_container(&mut BufReader::new(file))) {
         return Some(e);
     }
+    // HEIF whose EXIF item the generic parser refuses (e.g. Xiaomi's ~190 KB
+    // blocks): let the HEIF decoder locate it and parse the TIFF directly.
+    if crate::imaging::is_heif_ext(&crate::imaging::ext_of(path)) {
+        let data = std::fs::read(path).ok()?;
+        let tiff = heic::DecoderConfig::new().extract_exif(&data).ok()??;
+        return tolerant(Reader::new().continue_on_error(true).read_raw(tiff.into_owned()));
+    }
     // RAW containers the parser doesn't recognise: Olympus ORF ("IIRO"),
     // Panasonic RW2 ("IIU\0"), Fuji RAF, Canon CR3 (ISO-BMFF with a TIFF
     // inside its CMT box). Look for a TIFF header near the start, then for an

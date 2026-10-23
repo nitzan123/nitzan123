@@ -102,6 +102,11 @@ CREATE TABLE IF NOT EXISTS roots (
     path      TEXT PRIMARY KEY,
     recursive INTEGER NOT NULL DEFAULT 1
 );
+-- Folders removed from the library while a parent is still a library root:
+-- the parent's watcher and rescans skip them.
+CREATE TABLE IF NOT EXISTS excluded (
+    path TEXT PRIMARY KEY
+);
 CREATE TABLE IF NOT EXISTS track_points (
     t   INTEGER NOT NULL,
     lat REAL NOT NULL,
@@ -217,6 +222,15 @@ fn asset_from_row(r: &Row<'_>) -> rusqlite::Result<Asset> {
         needs_place: r.get(26)?,
         to_check: r.get(27)?,
     })
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RemovedFolder {
+    /// Photos taken out of the catalog.
+    pub photos: usize,
+    /// Library roots that were inside the folder (stop watching them).
+    pub unwatched: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -349,7 +363,12 @@ impl Catalog {
     // ------------------------------------------------------------------ roots
 
     /// Records a folder the user added to the library (watched for changes).
+    /// Adding it back un-does an earlier removal of it or anything below it.
     pub fn add_root(&self, path: &str, recursive: bool) -> Result<()> {
+        let gone: Vec<String> = self.excluded()?.into_iter().filter(|e| at_or_below(e, path)).collect();
+        for e in gone {
+            self.conn.execute("DELETE FROM excluded WHERE path = ?1", [e])?;
+        }
         self.conn.execute(
             "INSERT INTO roots(path, recursive) VALUES (?1, ?2) \
              ON CONFLICT(path) DO UPDATE SET recursive = max(recursive, excluded.recursive)",
@@ -373,6 +392,46 @@ impl Catalog {
                 })
             })
             .collect())
+    }
+
+    /// Removes `path` and everything below it from the library: catalog
+    /// rows (ratings, edits, faces…) go, the files on disk are not touched.
+    /// Library roots inside it are dropped; if it sits inside a root that
+    /// stays, it is remembered as excluded so rescans don't bring it back.
+    pub fn remove_folder(&mut self, path: &str) -> Result<RemovedFolder> {
+        let path = path.trim_end_matches(['/', '\\']).to_string();
+        let ids: Vec<i64> = self.assets_under(&path, true)?.into_iter().map(|(id, _)| id).collect();
+        let all_roots: Vec<(String, bool)> = {
+            let mut st = self.conn.prepare("SELECT path, recursive FROM roots")?;
+            let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            rows.collect::<rusqlite::Result<_>>()?
+        };
+        let (dropped, kept): (Vec<_>, Vec<_>) = all_roots.into_iter().partition(|(r, _)| at_or_below(r, &path));
+        let covered = kept.iter().any(|(r, recursive)| *recursive && at_or_below(&path, r));
+        let tx = self.conn.transaction()?;
+        {
+            let mut del = tx.prepare_cached("DELETE FROM assets WHERE id = ?1")?;
+            for id in &ids {
+                del.execute([id])?;
+            }
+            for (r, _) in &dropped {
+                tx.execute("DELETE FROM roots WHERE path = ?1", [r])?;
+            }
+            if covered {
+                tx.execute("INSERT OR IGNORE INTO excluded(path) VALUES (?1)", [&path])?;
+            }
+            // Empty folder rows would otherwise linger in the folder list.
+            tx.execute("DELETE FROM folders WHERE id NOT IN (SELECT DISTINCT folder_id FROM assets)", [])?;
+        }
+        tx.commit()?;
+        Ok(RemovedFolder { photos: ids.len(), unwatched: dropped.into_iter().map(|(r, _)| r).collect() })
+    }
+
+    /// Folders removed from the library inside a root that is still watched.
+    pub fn excluded(&self) -> Result<Vec<String>> {
+        let mut st = self.conn.prepare("SELECT path FROM excluded")?;
+        let rows = st.query_map([], |r| r.get(0))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     // ---------------------------------------------------------------- folders
@@ -1187,6 +1246,12 @@ fn face_row(r: &Row<'_>) -> rusqlite::Result<FaceRow> {
     })
 }
 
+/// `path` is `root` or a file/folder somewhere below it (either separator).
+pub fn at_or_below(path: &str, root: &str) -> bool {
+    let root = root.trim_end_matches(['/', '\\']);
+    path == root || path.strip_prefix(root).is_some_and(|rest| rest.starts_with(['/', '\\']))
+}
+
 /// Paths in `folders` that are not inside another path of the list.
 fn top_level(folders: &[String]) -> Vec<&String> {
     folders
@@ -1452,6 +1517,46 @@ mod tests {
         }
         let c = Catalog::open(&db).unwrap();
         assert_eq!(c.roots().unwrap(), vec![("/a/x".to_string(), true), ("/b".to_string(), true)]);
+    }
+
+    #[test]
+    fn removing_a_folder_forgets_it_but_not_its_neighbours() {
+        let mut c = Catalog::open_in_memory().unwrap();
+        c.add_root("/trip", true).unwrap();
+        c.add_root("/trip/cusco/raw", false).unwrap();
+        c.add_root("/home", true).unwrap();
+        c.upsert_many(&[
+            in_folder("/trip/lima", "1.jpg", None, None),
+            in_folder("/trip/cusco", "2.jpg", None, None),
+            in_folder("/trip/cusco/raw", "3.jpg", None, None),
+            in_folder("/trip/cusco-2", "4.jpg", None, None),
+            in_folder("/home", "5.jpg", None, None),
+        ])
+        .unwrap();
+        let rated = c.asset_by_path("/trip/cusco/2.jpg").unwrap().unwrap().id;
+        c.set_rating(&[rated], 5).unwrap();
+
+        // A sub-folder of a root: its photos go, the root stays, and the
+        // folder is excluded so the root's watcher won't re-add it.
+        let r = c.remove_folder("/trip/cusco/").unwrap();
+        assert_eq!(r.photos, 2);
+        assert_eq!(r.unwatched, vec!["/trip/cusco/raw".to_string()]);
+        let left: Vec<String> = c.folders().unwrap().into_iter().map(|f| f.path).collect();
+        assert_eq!(left, vec!["/home", "/trip/cusco-2", "/trip/lima"]);
+        assert_eq!(c.roots().unwrap(), vec![("/home".to_string(), true), ("/trip".to_string(), true)]);
+        assert_eq!(c.excluded().unwrap(), vec!["/trip/cusco".to_string()]);
+
+        // Adding it back clears the exclusion; the photo returns fresh.
+        c.add_root("/trip/cusco", true).unwrap();
+        assert!(c.excluded().unwrap().is_empty());
+        c.upsert_many(&[in_folder("/trip/cusco", "2.jpg", None, None)]).unwrap();
+        assert_eq!(c.asset_by_path("/trip/cusco/2.jpg").unwrap().unwrap().rating, 0);
+
+        // A whole root: no exclusion needed, it is simply no longer watched.
+        let r = c.remove_folder("/home").unwrap();
+        assert_eq!((r.photos, r.unwatched), (1, vec!["/home".to_string()]));
+        assert!(c.excluded().unwrap().is_empty());
+        assert_eq!(c.search(&SearchQuery::default()).unwrap().len(), 3);
     }
 
     #[test]

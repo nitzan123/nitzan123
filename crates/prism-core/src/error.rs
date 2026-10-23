@@ -12,6 +12,8 @@ pub enum Error {
     Json(#[from] serde_json::Error),
     #[error("raw decode failed for {path}: {reason}")]
     Raw { path: PathBuf, reason: String },
+    #[error("could not decode {path}: {reason}")]
+    Decode { path: PathBuf, reason: String },
     #[error("unsupported file: {0}")]
     Unsupported(PathBuf),
     #[error("network error: {0}")]

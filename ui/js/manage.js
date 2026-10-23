@@ -90,6 +90,27 @@ function setScope(scope, patch) {
   return reload({ keepFocus: false });
 }
 
+/** Takes a folder out of the library after confirming; disk is untouched. */
+async function removeFolder(n) {
+  const dlg = $("remove-folder-dialog");
+  $("remove-folder-path").textContent = n.path;
+  $("remove-folder-count").textContent = `${n.count} photo${n.count === 1 ? "" : "s"} will disappear from Prism Studio.`;
+  dlg.returnValue = "";
+  dlg.showModal();
+  const ok = await new Promise((r) => dlg.addEventListener("close", () => r(dlg.returnValue === "ok"), { once: true }));
+  if (!ok) return;
+  try {
+    const res = await api.removeFolder(n.path);
+    const scoped = store.query.folderTree ?? store.query.folder;
+    const inside = (p) => p === n.path || (p && (p.startsWith(n.path + "/") || p.startsWith(n.path + "\\")));
+    if (inside(scoped)) await setScope("All photos", {});
+    else emit("library-changed");
+    toast(`Removed ${n.label} from the library (${res.photos} photo${res.photos === 1 ? "" : "s"}). Files were not deleted.`);
+  } catch (e) {
+    toast(`Could not remove folder: ${e}`, true);
+  }
+}
+
 function patchQuery(patch) {
   Object.assign(store.query, patch);
   for (const k of Object.keys(store.query)) if (store.query[k] === undefined) delete store.query[k];
@@ -143,14 +164,16 @@ export async function refreshSidebar() {
   $("all-photos").replaceChildren(item("All photos", total, allActive, () => setScope("All photos", {})));
   const roots = folderTree(folders);
   if (!folderExpanded) folderExpanded = new Set(roots.map((r) => r.key));
-  const withRescan = (n) => ({
+  const withActions = (n) => ({
     ...n,
-    extra: n.own > 0
-      ? el("button", { class: "icon-btn del", title: "Rescan this folder", "aria-label": `Rescan ${n.label}`, onclick: (e) => (e.stopPropagation(), api.rescanFolder(n.path)) }, "⟳")
-      : null,
-    children: n.children.map(withRescan),
+    extra: el("span", { class: "row-actions" },
+      n.own > 0
+        ? el("button", { class: "icon-btn del", title: "Rescan this folder", "aria-label": `Rescan ${n.label}`, onclick: (e) => (e.stopPropagation(), api.rescanFolder(n.path)) }, "⟳")
+        : null,
+      el("button", { class: "icon-btn del", title: "Remove from library (files stay on disk)", "aria-label": `Remove ${n.label} from library`, onclick: (e) => (e.stopPropagation(), removeFolder(n)) }, "✕")),
+    children: n.children.map(withActions),
   });
-  renderTree($("folder-list"), roots.map(withRescan), {
+  renderTree($("folder-list"), roots.map(withActions), {
     expanded: folderExpanded,
     activeKey: q.folderTree ?? q.folder,
     onSelect: (n) => setScope(n.path, { folderTree: n.path }),

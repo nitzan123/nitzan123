@@ -19,7 +19,8 @@ for what was studied and where the clean-room boundary sits.
 
 **Manage**
 - **Open from anywhere**: double-click a photo or use "Open with" in your
-  file manager (JPEG, PNG, TIFF, WebP and common RAW formats). Its folder
+  file manager (JPEG, HEIC, PNG, TIFF, WebP, AVIF, JPEG XL and common RAW
+  formats). Its folder
   joins the library and the photo opens; a running Prism Studio picks it up
   instead of starting a second copy.
 - **Folders stay in sync**: while the app runs it watches your library
@@ -27,6 +28,11 @@ for what was studied and where the clean-room boundary sits.
   by themselves (changes are batched; a camera import is one update).
 - **Folder tree**: nested folders with photo counts; selecting a folder
   shows it with everything below it.
+- **Remove a folder from the library** (✕ next to it in the tree, after a
+  confirmation): its photos stop showing in Prism Studio. Nothing is deleted
+  from disk, and stars, keywords and edits stay in the XMP sidecars, so
+  adding the folder again brings them back. A removed sub-folder stays out
+  even though its parent is still watched.
 - **Calendar**: browse by year › month › day of capture (plus "No date").
 - **Map**: photos with GPS on an OpenStreetMap map, clustered, honouring the
   current folder and filters. Click a cluster to select its photos, open one,
@@ -159,7 +165,8 @@ tokens as rename). Available from Manage (batch) and Develop.
 
 | | |
 |---|---|
-| Raster | JPEG, PNG, TIFF, WebP, GIF, BMP |
+| Raster | JPEG, PNG, TIFF, WebP, GIF, BMP. Files are recognised by content, so a PNG saved as `.jpg` still opens. |
+| Phone / modern | HEIC and HEIF (iPhone, Samsung, Canon/Sony `.hif`), AVIF, JPEG XL. Rotation, date, camera and GPS are read from HEIC like from JPEG. Decoded at 8 bits per channel; HDR gain maps are ignored. |
 | RAW | CR2, NEF, ARW, DNG, ORF, RW2, RAF, PEF, SRW and [many more](crates/prism-core/src/raw.rs) via rawloader. CR3 has a thumbnail preview only. |
 | Sidecar | `photo.ext.xmp`, which holds `xmp:Rating`, `xmp:Label`, `dc:subject` and `dc:description`. Lightroom, darktable and digiKam can read these. Develop settings are stored in the `prism:` namespace. If `photo.ext.xmp` was written by another program (for example darktable's edit history), Prism never overwrites it: it reads the rating and keywords from it and writes its own data to `photo.ext.prism.xmp` instead. |
 
@@ -224,12 +231,12 @@ cargo run --release --example develop_cli -- out/ photo1.NEF photo2.CR2
 
 ```
 crates/prism-core   UI-agnostic engine (all logic, all tests)
-  catalog.rs        SQLite catalog: assets (incl. GPS), folders, keywords, collections, presets, saved searches, develop JSON; migrations
+  catalog.rs        SQLite catalog: assets (incl. GPS), folders, keywords, collections, presets, saved searches, develop JSON, library roots and removed folders; migrations
   scan.rs           folder walk + EXIF incl. GPS (parallel, tolerant of malformed EXIF)
   geocode.rs        GPS → "City, Country" via OpenStreetMap (rate-limited, cached)
   tiles.rs          OpenStreetMap map tiles with an on-disk cache and offline fallback
   overlay.rs        caption text rendering (bundled DejaVu Sans Bold, bidi-aware)
-  imaging.rs        single entry point for decoding (display path / linear path)
+  imaging.rs        single entry point for decoding (display path / linear path): raster, HEIC/AVIF, JPEG XL, RAW
   raw.rs            embedded-preview extraction, RAW decode → linear sRGB, base curve
   demosaic.rs       full-resolution demosaic (Malvar–He–Cutler Bayer, generic CFA)
   lens.rs           lensfun DB parse/match/interpolate + distortion/TCA/vignetting correction
@@ -272,8 +279,14 @@ noise reduction and sharpening.
   folder once to also catch brand-new subfolders.
 - WebP export is lossless only (the pure-Rust encoder has no lossy mode);
   exports are 8-bit. Renames can't be undone from the app, which is why the
-  dialog previews every name first. HEIC and CR3 full decode are not
-  supported.
+  dialog previews every name first. CR3 full decode is not supported.
+- HEIC/AVIF decoding uses the pure-Rust [`heic`](https://crates.io/crates/heic)
+  crate, licensed AGPL-3.0 (or commercially). That is fine for this app's
+  own use, but anyone redistributing builds publicly must either publish
+  the source under AGPL terms or buy the commercial licence. HEVC itself is
+  patent-encumbered in some countries; decoding for personal use is the
+  common case. Very large images (around 200 MP) exceed the decoder's 1 GB
+  memory cap and are refused.
 
 See [docs/architecture.md](docs/architecture.md) for the roadmap.
 

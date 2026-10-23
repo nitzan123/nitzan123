@@ -94,6 +94,35 @@
       },
       {
         "ext": [
+          "heic",
+          "heif",
+          "hif"
+        ],
+        "mimeType": "image/heic",
+        "name": "HEIC image",
+        "description": "HEIC image (iPhone)",
+        "role": "Viewer"
+      },
+      {
+        "ext": [
+          "avif"
+        ],
+        "mimeType": "image/avif",
+        "name": "AVIF image",
+        "description": "AVIF image",
+        "role": "Viewer"
+      },
+      {
+        "ext": [
+          "jxl"
+        ],
+        "mimeType": "image/jxl",
+        "name": "JPEG XL image",
+        "description": "JPEG XL image",
+        "role": "Viewer"
+      },
+      {
+        "ext": [
           "dng"
         ],
         "mimeType": "image/x-adobe-dng",

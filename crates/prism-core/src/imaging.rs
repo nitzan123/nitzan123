@@ -8,15 +8,82 @@ use image::{imageops, DynamicImage, RgbImage};
 use std::path::Path;
 use std::sync::OnceLock;
 
-pub const RASTER_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "tif", "tiff", "webp", "gif", "bmp"];
+pub const RASTER_EXTENSIONS: &[&str] = &["jpg", "jpeg", "jpe", "jfif", "png", "tif", "tiff", "webp", "gif", "bmp"];
+
+/// ISO-BMFF stills: iPhone/Samsung HEIC, generic HEIF, Canon/Sony HIF and
+/// AVIF. The decoder applies the container's rotation/mirror itself.
+pub const HEIF_EXTENSIONS: &[&str] = &["heic", "heif", "hif", "avif"];
+
+/// JPEG XL. The decoder applies the codestream orientation itself.
+pub const JXL_EXTENSIONS: &[&str] = &["jxl"];
 
 pub fn ext_of(path: &Path) -> String {
     path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase()
 }
 
+pub fn is_heif_ext(ext: &str) -> bool {
+    HEIF_EXTENSIONS.contains(&ext)
+}
+
+fn is_raster_ext(ext: &str) -> bool {
+    RASTER_EXTENSIONS.contains(&ext) || is_heif_ext(ext) || JXL_EXTENSIONS.contains(&ext)
+}
+
 pub fn is_supported(path: &Path) -> bool {
     let ext = ext_of(path);
-    RASTER_EXTENSIONS.contains(&ext.as_str()) || is_raw_ext(&ext)
+    is_raster_ext(&ext) || is_raw_ext(&ext)
+}
+
+/// EXIF orientation still to apply after decoding. HEIF and JPEG XL decoders
+/// already rotate (iPhones write both `irot` and EXIF orientation, so using
+/// EXIF too would turn portraits sideways).
+fn pending_orientation(path: &Path, ext: &str) -> u16 {
+    if is_heif_ext(ext) || JXL_EXTENSIONS.contains(&ext) {
+        1
+    } else {
+        read_exif(path).orientation
+    }
+}
+
+/// Non-RAW decode. Content sniffing first, so a PNG saved as `.jpg` (common
+/// with messaging apps) still opens.
+fn decode_raster(path: &Path, ext: &str) -> Result<DynamicImage> {
+    if is_heif_ext(ext) {
+        return decode_heif(path);
+    }
+    if JXL_EXTENSIONS.contains(&ext) {
+        return decode_jxl(path);
+    }
+    Ok(image::ImageReader::open(path)?.with_guessed_format()?.decode()?)
+}
+
+fn decode_error(path: &Path, reason: impl ToString) -> Error {
+    Error::Decode { path: path.to_path_buf(), reason: reason.to_string() }
+}
+
+fn decode_heif(path: &Path) -> Result<DynamicImage> {
+    let data = std::fs::read(path)?;
+    let out = heic::DecoderConfig::new().decode(&data, heic::PixelLayout::Rgba8).map_err(|e| decode_error(path, e))?;
+    let img = image::RgbaImage::from_raw(out.width, out.height, out.data)
+        .ok_or_else(|| decode_error(path, "short pixel buffer"))?;
+    Ok(DynamicImage::ImageRgba8(img))
+}
+
+fn decode_jxl(path: &Path) -> Result<DynamicImage> {
+    let jxl = jxl_oxide::JxlImage::builder().open(path).map_err(|e| decode_error(path, e))?;
+    let fb = jxl.render_frame(0).map_err(|e| decode_error(path, e))?.image_all_channels();
+    let (w, h, ch) = (fb.width() as u32, fb.height() as u32, fb.channels());
+    let rgb: Vec<f32> = fb
+        .buf()
+        .chunks_exact(ch)
+        .flat_map(|px| match ch {
+            1 | 2 => [px[0]; 3],
+            _ => [px[0], px[1], px[2]],
+        })
+        .map(|v| v.clamp(0.0, 1.0))
+        .collect();
+    let img = image::Rgb32FImage::from_raw(w, h, rgb).ok_or_else(|| decode_error(path, "short pixel buffer"))?;
+    Ok(DynamicImage::ImageRgb32F(img))
 }
 
 /// 8-bit sRGB image for browsing (thumbnails, viewer). RAW files use their
@@ -29,12 +96,12 @@ pub fn load_display(path: &Path, max_dim: u32) -> Result<RgbImage> {
             Some(jpeg) => image::load_from_memory(&jpeg)?,
             None => DynamicImage::ImageRgb32F(decode_raw(path, max_dim)?.map_to_srgb()),
         }
-    } else if RASTER_EXTENSIONS.contains(&ext.as_str()) {
-        image::open(path)?
+    } else if is_raster_ext(&ext) {
+        decode_raster(path, &ext)?
     } else {
         return Err(Error::Unsupported(path.to_path_buf()));
     };
-    let img = apply_orientation(img, read_exif(path).orientation);
+    let img = apply_orientation(img, pending_orientation(path, &ext));
     Ok(fit(img, max_dim).to_rgb8())
 }
 
@@ -42,8 +109,8 @@ pub fn load_display(path: &Path, max_dim: u32) -> Result<RgbImage> {
 /// from sensor data, not from the preview.
 pub fn load_linear(path: &Path, max_dim: u32) -> Result<LinearImage> {
     let ext = ext_of(path);
-    let orientation = read_exif(path).orientation;
     let lin = if is_raw_ext(&ext) {
+        let orientation = read_exif(path).orientation;
         match decode_raw(path, max_dim) {
             Ok(lin) => {
                 apply_orientation(DynamicImage::ImageRgb32F(downscale_linear(lin, max_dim)), orientation).to_rgb32f()
@@ -57,8 +124,8 @@ pub fn load_linear(path: &Path, max_dim: u32) -> Result<LinearImage> {
                 to_linear(img.to_rgb32f())
             }
         }
-    } else if RASTER_EXTENSIONS.contains(&ext.as_str()) {
-        let img = apply_orientation(fit(image::open(path)?, max_dim), orientation);
+    } else if is_raster_ext(&ext) {
+        let img = apply_orientation(fit(decode_raster(path, &ext)?, max_dim), pending_orientation(path, &ext));
         to_linear(img.to_rgb32f())
     } else {
         return Err(Error::Unsupported(path.to_path_buf()));

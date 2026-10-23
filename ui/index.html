@@ -172,6 +172,15 @@
       <menu><button value="ok" class="btn primary">OK</button><button value="cancel" class="btn">Cancel</button></menu>
     </form>
   </dialog>
+  <dialog id="remove-folder-dialog" aria-labelledby="remove-folder-title">
+    <form method="dialog">
+      <h3 id="remove-folder-title">Remove folder from library?</h3>
+      <p><strong id="remove-folder-path"></strong></p>
+      <p class="hint" id="remove-folder-count"></p>
+      <p class="hint">The photos stay on your computer — nothing is deleted from disk. They just stop showing here. Stars, keywords and edits are kept next to the files, so adding the folder again brings them back.</p>
+      <menu><button value="ok" class="btn primary">Remove from library</button><button value="cancel" class="btn" autofocus>Cancel</button></menu>
+    </form>
+  </dialog>
   <dialog id="export-dialog">
     <form method="dialog" class="export-form">
       <h3>Export</h3>

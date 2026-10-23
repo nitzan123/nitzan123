@@ -40,7 +40,12 @@ pub fn run(app: &AppHandle, root: &std::path::Path, recursive: bool, quiet: bool
     };
 
     emit("scanning", 0, 0);
-    let paths = scan::list_media(root, recursive);
+    let mut paths = scan::list_media(root, recursive);
+    // Folders the user removed from the library while a parent stays in it.
+    let excluded = state.catalog().excluded()?;
+    if !excluded.is_empty() {
+        paths.retain(|p| !excluded.iter().any(|e| prism_core::catalog::at_or_below(&p.to_string_lossy(), e)));
+    }
     let scanned = scan::scan_files(&paths);
     let results = state.catalog().upsert_many(&scanned)?;
     let mut changes = results.iter().filter(|r| !matches!(r, Upsert::Unchanged(_))).count();

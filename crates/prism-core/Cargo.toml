@@ -9,6 +9,10 @@ description = "Catalog, metadata, thumbnail and non-destructive develop engine f
 rusqlite = { version = "0.32", features = ["bundled"] }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "tiff", "webp", "gif", "bmp"] }
 kamadak-exif = "0.6"
+# HEIC/HEIF (iPhone) and AVIF, pure Rust. AGPL-3.0: fine for this app's
+# private use; see README before redistributing binaries.
+heic = { version = "0.1.6", features = ["parallel", "av1"] }
+jxl-oxide = "0.12"
 tiff = "0.11"
 rawloader = "0.37"
 rayon = "1.10"

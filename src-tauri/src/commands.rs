@@ -84,6 +84,19 @@ pub fn rescan_folder(app: AppHandle, path: String) -> CmdResult<()> {
     Ok(())
 }
 
+/// Takes a folder (and everything below it) out of the library. Files on
+/// disk are never touched; ratings and edits survive in XMP sidecars, so
+/// adding the folder again brings them back.
+#[tauri::command]
+pub fn remove_folder(app: AppHandle, path: String) -> CmdResult<prism_core::catalog::RemovedFolder> {
+    let removed = app.state::<AppState>().catalog().remove_folder(&path).map_err(s)?;
+    let watch = app.state::<crate::watcher::Watch>();
+    for root in &removed.unwatched {
+        watch.remove(Path::new(root));
+    }
+    Ok(removed)
+}
+
 #[tauri::command]
 pub fn folders(state: State<'_, AppState>) -> CmdResult<Vec<FolderInfo>> {
     state.catalog().folders().map_err(s)
