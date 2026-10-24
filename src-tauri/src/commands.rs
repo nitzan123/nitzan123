@@ -11,7 +11,7 @@ use prism_core::develop::{
 };
 use prism_core::embed::{encode_with_meta, ExportMeta};
 use prism_core::geocode::PlaceDetail;
-use prism_core::locate::{self, Estimate, Source};
+use prism_core::locate::{self, Estimate, Source, Stop};
 use prism_core::metadata::date_from_filename;
 use prism_core::metadata::read_exif;
 use prism_core::overlay::{format_date, DateFormat, TextOverlay};
@@ -20,7 +20,7 @@ use prism_core::workflow::{
     apply_preset, builtin_presets, execute_renames, look_of, plan_renames, unique_path, ExportFormat, NameTemplate,
     Preset, RenamePlan,
 };
-use prism_core::{xmp, Asset, Catalog, DevelopSettings, SearchQuery};
+use prism_core::{scan, xmp, Asset, Catalog, DevelopSettings, SearchQuery};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -419,6 +419,8 @@ fn town(state: &AppState, [lat, lon]: [f64; 2], language: &str, detail: PlaceDet
 #[tauri::command]
 pub async fn text_apply(app: AppHandle, ids: Vec<i64>, options: TextApply) -> CmdResult<TextApplyResult> {
     tauri::async_runtime::spawn_blocking(move || {
+        // A Timeline.json copied in since the app started.
+        auto_import_history(&app);
         let state = app.state::<AppState>();
         let mut res = TextApplyResult::default();
         let total = ids.len();
@@ -480,10 +482,12 @@ pub async fn text_apply(app: AppHandle, ids: Vec<i64>, options: TextApply) -> Cm
                         String::new()
                     }
                 };
-            // A venue only from the photo's own GPS: on an estimated
-            // position it would be a guess on a guess.
+            // An estimated position gets a venue only when it is a stop in
+            // the location history (the phone stayed at that place);
+            // elsewhere it would be a guess on a guess.
             let estimate_detail =
                 if options.place_detail == PlaceDetail::Venue { PlaceDetail::City } else { options.place_detail };
+            let venue_mode = options.place_detail == PlaceDetail::Venue;
             (t.place, t.place_from, t.place_note) = if !options.place {
                 (String::new(), Source::None, String::new())
             } else if typed(old.place_from, &old.place) {
@@ -499,8 +503,22 @@ pub async fn text_apply(app: AppHandle, ids: Vec<i64>, options: TextApply) -> Cm
                 } else {
                     (place, Source::Photo, String::new())
                 }
-            } else if let Some(e) =
-                estimates.get(&id).map(|e| (e, lookup([e.lat, e.lon], estimate_detail))).filter(|(_, p)| !p.is_empty())
+            } else if let Some(e) = estimates
+                .get(&id)
+                .map(|e| {
+                    let place = match (&e.stop, venue_mode) {
+                        // The export named the place: no map lookup needed.
+                        (Some(Stop { name: Some(n) }), true) => prism_core::geocode::join_venue(
+                            Some(n.clone()),
+                            Some(lookup([e.lat, e.lon], PlaceDetail::City)).filter(|t| !t.is_empty()),
+                        )
+                        .unwrap_or_default(),
+                        (Some(_), true) => lookup([e.lat, e.lon], PlaceDetail::Venue),
+                        _ => lookup([e.lat, e.lon], estimate_detail),
+                    };
+                    (e, place)
+                })
+                .filter(|(_, p)| !p.is_empty())
             {
                 let (e, place) = e;
                 // Only a same-camera neighbour minutes apart, with the photos
@@ -569,27 +587,65 @@ pub fn location_history(state: State<'_, AppState>) -> CmdResult<TrackSummary> {
     track_summary(&state.catalog())
 }
 
+/// Replaces the location history with the file at `path` and remembers
+/// which file (and version of it) that was.
+fn import_track_file(state: &AppState, path: &Path) -> Result<TrackSummary, String> {
+    let mtime = scan::stat(path).map(|(_, m)| m).unwrap_or(0);
+    let file = std::fs::File::open(path).map_err(s)?;
+    let json: serde_json::Value = serde_json::from_reader(std::io::BufReader::new(file))
+        .map_err(|e| format!("not a location-history file: {e}"))?;
+    let points = locate::parse_timeline(&json);
+    if points.is_empty() {
+        return Err(
+            "No locations found in this file. Export it from Google Maps → Timeline (see the help text).".into()
+        );
+    }
+    let mut cat = state.catalog();
+    cat.set_track(&points).map_err(s)?;
+    let _ = cat.set_setting("history_file", &format!("{mtime}|{}", path.display()));
+    track_summary(&cat)
+}
+
+/// Loads a location-history export the user put in Downloads, Desktop,
+/// Documents or a library folder, so it needn't be imported by hand. Only
+/// a file newer than the one loaded last is taken. Returns what was loaded.
+pub fn auto_import_history(app: &AppHandle) -> Option<(String, TrackSummary)> {
+    let state = app.state::<AppState>();
+    let paths = app.path();
+    let mut dirs: Vec<PathBuf> =
+        [paths.download_dir(), paths.desktop_dir(), paths.document_dir()].into_iter().flatten().collect();
+    // Where the system doesn't name these folders (some Linux setups).
+    if let Ok(home) = paths.home_dir() {
+        dirs.extend(["Downloads", "Desktop", "Documents"].map(|d| home.join(d)));
+    }
+    dirs.sort();
+    dirs.dedup();
+    dirs.extend(state.catalog().roots().unwrap_or_default().into_iter().map(|(r, _)| PathBuf::from(r)));
+    let (path, mtime) = locate::find_history_file(&dirs)?;
+    let loaded: i64 = state
+        .catalog()
+        .setting("history_file")
+        .ok()
+        .flatten()
+        .and_then(|v| v.split('|').next().and_then(|m| m.parse().ok()))
+        .unwrap_or(i64::MIN);
+    if mtime <= loaded {
+        return None;
+    }
+    let summary = import_track_file(&state, &path).ok()?;
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let _ = app.emit("history-imported", (&name, &summary));
+    Some((name, summary))
+}
+
 /// Imports a Google Maps location-history export (replacing any earlier
-/// import). Only the time and position of each point are kept.
+/// import). Only the time and position of each point are kept, plus
+/// whether the phone was staying at a place then (and its name, if given).
 #[tauri::command]
 pub async fn import_location_history(app: AppHandle, path: String) -> CmdResult<TrackSummary> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let file = std::fs::File::open(&path).map_err(s)?;
-        let json: serde_json::Value = serde_json::from_reader(std::io::BufReader::new(file))
-            .map_err(|e| format!("not a location-history file: {e}"))?;
-        let points = locate::parse_timeline(&json);
-        if points.is_empty() {
-            return Err(
-                "No locations found in this file. Export it from Google Maps → Timeline (see the help text).".into()
-            );
-        }
-        let state = app.state::<AppState>();
-        let mut cat = state.catalog();
-        cat.set_track(&points).map_err(s)?;
-        track_summary(&cat)
-    })
-    .await
-    .map_err(s)?
+    tauri::async_runtime::spawn_blocking(move || import_track_file(&app.state::<AppState>(), Path::new(&path)))
+        .await
+        .map_err(s)?
 }
 
 /// Sets the subject and/or place on several photos at once (fields left

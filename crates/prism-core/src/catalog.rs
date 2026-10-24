@@ -112,9 +112,12 @@ CREATE TABLE IF NOT EXISTS settings (
     value TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS track_points (
-    t   INTEGER NOT NULL,
-    lat REAL NOT NULL,
-    lon REAL NOT NULL
+    t         INTEGER NOT NULL,
+    lat       REAL NOT NULL,
+    lon       REAL NOT NULL,
+    -- 1 while the phone stayed at a place (visit), with its name if known.
+    stop      INTEGER NOT NULL DEFAULT 0,
+    stop_name TEXT
 );
 CREATE INDEX IF NOT EXISTS track_points_t ON track_points(t);
 CREATE TABLE IF NOT EXISTS presets (
@@ -884,13 +887,15 @@ impl Catalog {
 
     /// Replaces the imported location history with `points` (naive time,
     /// lat, lon). Returns how many were stored.
-    pub fn set_track(&mut self, points: &[(i64, f64, f64)]) -> Result<usize> {
+    pub fn set_track(&mut self, points: &[crate::locate::TrackPoint]) -> Result<usize> {
         let tx = self.conn.transaction()?;
         tx.execute("DELETE FROM track_points", [])?;
         {
-            let mut st = tx.prepare("INSERT INTO track_points(t, lat, lon) VALUES (?1, ?2, ?3)")?;
-            for (t, la, lo) in points {
-                st.execute(params![t, la, lo])?;
+            let mut st =
+                tx.prepare("INSERT INTO track_points(t, lat, lon, stop, stop_name) VALUES (?1, ?2, ?3, ?4, ?5)")?;
+            for p in points {
+                let name = p.stop.as_ref().and_then(|s| s.name.as_deref());
+                st.execute(params![p.t, p.lat, p.lon, p.stop.is_some(), name])?;
             }
         }
         tx.commit()?;
@@ -898,9 +903,17 @@ impl Catalog {
     }
 
     pub fn track(&self) -> Result<Vec<crate::locate::RefPoint>> {
-        let mut st = self.conn.prepare("SELECT t, lat, lon FROM track_points ORDER BY t")?;
+        let mut st = self.conn.prepare("SELECT t, lat, lon, stop, stop_name FROM track_points ORDER BY t")?;
         let rows = st.query_map([], |r| {
-            Ok(crate::locate::RefPoint { t: r.get(0)?, lat: r.get(1)?, lon: r.get(2)?, camera: None, asset_id: None })
+            let stop = r.get::<_, bool>(3)?.then(|| crate::locate::Stop { name: r.get(4).ok().flatten() });
+            Ok(crate::locate::RefPoint {
+                t: r.get(0)?,
+                lat: r.get(1)?,
+                lon: r.get(2)?,
+                camera: None,
+                asset_id: None,
+                stop,
+            })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
@@ -959,7 +972,7 @@ impl Catalog {
                 continue;
             }
             if let Some(t) = crate::locate::naive_secs(&taken) {
-                out.push(crate::locate::RefPoint { t, lat, lon, camera, asset_id: Some(id) });
+                out.push(crate::locate::RefPoint { t, lat, lon, camera, asset_id: Some(id), stop: None });
             }
         }
         Ok(out)
@@ -1285,6 +1298,14 @@ fn top_level(folders: &[String]) -> Vec<&String> {
 
 /// Brings catalogs created by older versions up to the current columns.
 fn migrate(conn: &Connection) -> Result<()> {
+    let has_stop: bool =
+        conn.query_row("SELECT COUNT(*) FROM pragma_table_info('track_points') WHERE name = 'stop'", [], |r| r.get(0))?;
+    if !has_stop {
+        conn.execute_batch(
+            "ALTER TABLE track_points ADD COLUMN stop INTEGER NOT NULL DEFAULT 0; \
+             ALTER TABLE track_points ADD COLUMN stop_name TEXT;",
+        )?;
+    }
     let has_gps: bool =
         conn.query_row("SELECT COUNT(*) FROM pragma_table_info('assets') WHERE name = 'gps_lat'", [], |r| r.get(0))?;
     if !has_gps {
@@ -1724,7 +1745,8 @@ mod tests {
         assert_eq!(review(&c), vec![b]);
 
         let mut c = c;
-        assert_eq!(c.set_track(&[(100, 1.0, 2.0), (200, 3.0, 4.0)]).unwrap(), 2);
+        let p = |t, lat, lon| crate::locate::TrackPoint { t, lat, lon, stop: None };
+        assert_eq!(c.set_track(&[p(100, 1.0, 2.0), p(200, 3.0, 4.0)]).unwrap(), 2);
         assert_eq!(c.track_summary().unwrap(), (2, Some(100), Some(200)));
         assert_eq!(c.track().unwrap()[1].lat, 3.0);
 

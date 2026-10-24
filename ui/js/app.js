@@ -56,6 +56,9 @@ function wireProgress() {
   // Photos opened from the OS (file manager, "Open with", second launch).
   api.listen("open-file", (path) => manage.openFromOs(path));
   api.takePendingOpen().then((path) => path && manage.openFromOs(path)).catch(() => {});
+  // A Timeline.json found in Downloads / Desktop / a photo folder.
+  api.listen("history-imported", ([name, s]) =>
+    toast(`Location history loaded from ${name} (${s.from} → ${s.to}). Run 📝 Date & place to use it.`));
   // Photos added, changed or removed on disk while the app runs.
   api.listen("library-watch", () => emit("library-changed"));
   api.listen("index-error", (msg) => {

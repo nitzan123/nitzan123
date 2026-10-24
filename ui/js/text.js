@@ -200,8 +200,10 @@ async function historyBox(onImported) {
         "If Location / Timeline was on in her phone during the trip, Google Maps kept her route. ",
         "Android: Settings → Location → Location services → Timeline → Export Timeline data. ",
         "iPhone: Google Maps → your picture → Settings → Personal content → Export Timeline data. ",
-        "Copy the .json file to this computer and import it here. Only times and positions are read; ",
-        "nothing is uploaded.")));
+        "Copy the .json file to this computer — into Downloads, Desktop, Documents or the photos folder — ",
+        "and it is loaded automatically (or import it here). Photos taken while she stayed somewhere ",
+        "(a museum, a restaurant) get that place's name. Only times and positions are read; like photo GPS, ",
+        "the positions of those stops are looked up on OpenStreetMap.")));
 }
 
 /** The "Review places" screen: one row per group of photos taken together. */

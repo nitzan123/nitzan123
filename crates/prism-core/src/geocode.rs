@@ -207,7 +207,7 @@ pub fn format_venue(json: &Value) -> Option<String> {
 }
 
 /// "Venue, Town", without repeating a town that is also the venue's name.
-fn join_venue(venue: Option<String>, town: Option<String>) -> Option<String> {
+pub fn join_venue(venue: Option<String>, town: Option<String>) -> Option<String> {
     match (venue, town) {
         (Some(v), Some(t)) if v.eq_ignore_ascii_case(&t) => Some(t),
         (Some(v), Some(t)) => Some(format!("{v}, {t}")),

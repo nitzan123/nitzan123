@@ -161,8 +161,17 @@ tokens as rename). Available from Manage (batch) and Develop.
   - a **phone photo** taken at about the same time — the camera's clock
     offset (e.g. still on home time, +8 h) is detected automatically from
     all its photos;
-  - an imported **Google Maps location history** (Timeline export; on-device
-    `Timeline.json`, phone `location-history.json` or Takeout `Records.json`).
+  - a **Google Maps location history** (Timeline export; on-device
+    `Timeline.json`, phone `location-history.json`, Takeout `Records.json`
+    or Semantic Location History). Copy it into Downloads, Desktop,
+    Documents or a library folder and it is loaded automatically (a newer
+    copy replaces it); it can also be imported in Review places. Photos
+    taken during a **stop** (a museum, a restaurant) get that place's name,
+    e.g. "Museo Larco, Lima"; photos taken on the move get the town. The
+    phone export writes every time in the phone's current zone (Israel for
+    a Peru trip) and states the real local offset per segment; that offset
+    is used. With only a location history (no phone photos), a camera's
+    clock can't be checked, so it is assumed to show local time.
   Dates read from file names (WhatsApp: when it was *sent*) are marked too.
 - **📍 Review places** groups the photos needing attention by time: type the
   place once per group or press ✓ if the estimate is right. Photos with no
